@@ -1,0 +1,29 @@
+# Product Copilot Configuration
+
+reddit:
+  subreddits:
+    - "SaaS"
+    - "productivity"
+    - "startups"
+    - "software"
+    - "AskReddit"
+  search_sort: "relevance"
+  max_posts: 30
+  max_comments_per_post: 15
+
+g2:
+  request_delay: 2.0
+  max_pages: 5
+  user_agent_rotation: true
+
+clustering:
+  embedding_model: "all-MiniLM-L12-v2"
+  umap_n_neighbors: 15
+  umap_n_components: 5
+  hdbscan_min_cluster_size: 3
+  hdbscan_min_samples: 1
+
+llm:
+  model: "gpt-4o-mini"
+  temperature: 0.3
+  max_tokens: 2000
