@@ -12,7 +12,7 @@ class RedditScraper(BaseScraper):
         self.reddit = praw.Reddit(
             client_id=config.client_id,
             client_secret=config.client_secret,
-            user_agent="product-copilot/0.1 (research tool)",
+            user_agent="sift/0.1 (product research tool)",
         )
 
     @property

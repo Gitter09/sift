@@ -13,7 +13,7 @@ from src.models.report import ProductReport
 
 @click.group()
 def main():
-    """Product Research Copilot - scrape, cluster, and analyze product feedback."""
+    """Sift - scrape, cluster, and analyze product feedback."""
     pass
 
 

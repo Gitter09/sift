@@ -1,7 +1,7 @@
 [project]
-name = "product-copilot"
+name = "sift"
 version = "0.1.0"
-description = "Product Research Copilot - scrape, cluster, and analyze product feedback"
+description = "Sift - scrape, cluster, and analyze product feedback"
 requires-python = ">=3.11"
 
 dependencies = [
@@ -21,7 +21,7 @@ dependencies = [
 dev = ["pytest>=7.0"]
 
 [project.scripts]
-copilot = "src.cli:main"
+sift = "src.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -1,4 +1,4 @@
-# Product Research Copilot
+# Sift
 
 > Scrape user feedback from Reddit and G2, cluster complaints with ML, and generate AI-powered product insights — all from your terminal.
 
@@ -26,8 +26,8 @@ Multi-Product Comparison <──┘
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/<your-username>/product-copilot.git
-cd product-copilot
+git clone https://github.com/<your-username>/sift.git
+cd sift
 pip install -e ".[dev]"
 
 # 2. Configure
