@@ -78,9 +78,11 @@ def save_reports(
     product_reports: Dict[str, ProductReport],
     comparison_report: ComparisonReport,
     output_dir: str = "output",
-) -> None:
+) -> list[str]:
+    """Save all reports to disk. Returns the list of saved file paths."""
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    saved: list[str] = []
 
     for product, report in product_reports.items():
         slug = product.lower().replace(" ", "_")
@@ -89,18 +91,24 @@ def save_reports(
         with open(md_path, "w") as f:
             f.write(generate_markdown_report(report))
         logger.info("Saved markdown report: %s", md_path)
+        saved.append(md_path)
 
         json_path = os.path.join(output_dir, f"{slug}_{timestamp}.json")
         with open(json_path, "w") as f:
             json.dump(report.to_dict(), f, indent=2)
         logger.info("Saved JSON report: %s", json_path)
+        saved.append(json_path)
 
     md_path = os.path.join(output_dir, f"comparison_{timestamp}.md")
     with open(md_path, "w") as f:
         f.write(generate_comparison_markdown(comparison_report))
     logger.info("Saved comparison markdown: %s", md_path)
+    saved.append(md_path)
 
     json_path = os.path.join(output_dir, f"comparison_{timestamp}.json")
     with open(json_path, "w") as f:
         json.dump(comparison_report.to_dict(), f, indent=2)
     logger.info("Saved comparison JSON: %s", json_path)
+    saved.append(json_path)
+
+    return saved

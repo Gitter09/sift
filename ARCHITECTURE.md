@@ -205,3 +205,44 @@ Both tiers are configurable via `use_playwright_fallback` in `config.yaml` per-s
 **Why:** `curl_cffi` is a lightweight drop-in replacement for `requests` — it adds ~5MB of shared libraries versus ~300MB for a full Chromium install. But some sites use advanced JS challenges that only a real browser can solve. The two-tier approach gives us the speed and simplicity of `curl_cffi` for most cases, with Playwright as a "nuclear option" when needed. This avoids the massive dependency footprint of tools like Browser-Use (AI agent, wrong paradigm), Firecrawl (full microservice platform, AGPL licensed), or Crawlee (Node.js, not Python) while using the same underlying anti-bot techniques.
 
 **LinkedIn Angle:** "How I bypassed Cloudflare bot detection with a 5MB Python library instead of a 300MB browser — and why two-tier anti-bot strategy beats a monolithic scraping framework."
+
+
+---
+
+## Decision 019: Interactive CLI — Zero-Argument Entry Point with First-Run Setup
+
+**Date:** 2026-05-26
+**Context:** Running `sift` with no arguments showed a bare Click help page. New users had to learn subcommand syntax and manually create a `.env` file with API keys before the tool could do anything useful.
+**Decision:** Running `sift` with no arguments now launches a rich-powered interactive CLI. On first run, a setup wizard prompts for API keys (LLM key required, others optional) and saves them to `.env`. Subsequent runs go straight to a numbered main menu (Analyze, Scrape, Settings, Exit). The existing `sift analyze` and `sift scrape` subcommands continue working unchanged for scripts and CI.
+**Why:** A setup wizard eliminates the biggest onboarding friction — manually editing a `.env` file. The interactive menu makes Sift usable without memorizing CLI flags, which is critical for the target audience (non-developer product researchers). Extracting pipeline runners (`run_analyze`, `run_scrape`) from Click callbacks into standalone functions keeps the core logic reusable across both the CLI commands and the interactive menu without duplication.
+**LinkedIn Angle:** "How I turned a CLI tool into something my non-technical friends can use — zero arguments, a setup wizard, and a numbered menu."
+
+---
+
+## Decision 020: Default Source Filtering and Quiet Normal-Mode Diagnostics
+
+**Date:** 2026-05-26
+**Context:** A default `sift analyze "Notion"` run displayed many configured source names, then skipped most of them because product-specific IDs, repos, video IDs, URLs, or export paths were missing. Scraper logs also interleaved with Rich progress output, and scrape-only commands imported the UMAP clustering stack before scraping.
+**Decision:** Default runs now include only sources that are enabled and currently runnable from configuration. Always-runnable public sources remain available by default, while App Store, Play Store, YouTube, GitHub issues, support forums, changelogs, Discord exports, and LinkedIn exports join default runs only after their required config exists. Scraper diagnostics are quiet in normal mode and visible with `--verbose`; no-feedback runs print explicit setup guidance. The CLI also lazy-loads embedding, clustering, analysis, and comparison modules only after enough feedback exists for analysis.
+**Why:** A default run should represent work Sift can actually attempt, not a list of theoretical future integrations. Filtering unconfigured sources reduces misleading output, quiet diagnostics keep progress UI readable, no-feedback guidance gives the user a next action, and lazy ML imports prevent scrape-only workflows from failing on unrelated UMAP/numba environment issues.
+**LinkedIn Angle:** "The boring product lesson from a scraper CLI: default behavior should reflect what is actually runnable, not what your architecture theoretically supports."
+
+---
+
+## Decision 021: Runtime-Safe Browser and LLM Fallbacks
+
+**Date:** 2026-05-26
+**Context:** Product Hunt could trigger Playwright's "Sync API inside the asyncio loop" error during fallback fetching. Post-clustering analysis also crashed before the LLM call because prompt templates used literal JSON braces with `str.format()`, and expected LLM failures surfaced full tracebacks even though Sift is designed to continue with fallback labels.
+**Decision:** Browser fallback now detects a running asyncio loop and performs sync Playwright work in a helper thread with an isolated browser instance. Analyzer and comparator prompts escape literal JSON braces, tolerate missing or invalid LLM configuration, skip LLM calls when unavailable, and use deterministic fallback summaries without traceback logging for expected API failures.
+**Why:** Scrapers expose a synchronous interface, so moving only the browser fallback into a thread preserves the existing scraper contract while avoiding Playwright's sync API limitation. Escaped prompt schemas make the analysis stage reachable, and quiet deterministic LLM fallbacks keep successful scrape and clustering runs usable even when credentials, network, or model providers fail.
+**LinkedIn Angle:** "A scraper can survive two fragile dependencies: isolate browser fallbacks from event loops, and make AI analysis optional instead of pipeline-breaking."
+
+---
+
+## Decision 022: Monochromatic B&W CLI Aesthetic with Arrow-Key Menu Navigation
+
+**Date:** 2026-05-26
+**Context:** The Sift main menu used a solid cyan color scheme throughout — logo, panel borders, prompt labels, menu numbers — giving a "hacker terminal" look that felt inconsistent with a professional product research tool. The menu also required the user to type a number and press Enter rather than using keyboard navigation, which felt clunky for an interactive UI.
+**Decision:** Replaced all decorative cyan/blue colors with a white/dim monochromatic hierarchy. The SIFT logo now renders with a top-to-bottom brightness gradient (`bold bright_white` → `bold white` → `white`) to add depth without color. Panel borders and prompt labels use `white` and `bold`. Implemented real arrow-key navigation for the main menu using raw terminal I/O (`termios`/`tty`/`select` from stdlib) — `↑`/`↓` moves a `▶` indicator, `Enter` confirms, `q` exits. Functional severity indicators (red/yellow/green) were deliberately preserved since they carry semantic meaning.
+**Why:** B&W aesthetics signal confidence — color is often used to compensate for weak visual structure, whereas a well-structured monochrome UI looks intentional and polished. The gradient on the logo gives perceived depth without brightness inconsistency. Arrow-key navigation is the standard expectation for any modern interactive CLI (fzf, lazygit, k9s all do this); a numbered prompt forces the user to read, remember, type, and press Enter when a single keypress is more natural. The raw-terminal approach uses only stdlib (`termios`, `tty`, `select`) — zero new dependencies — and handles the escape-sequence timing edge case with a 50ms `select()` drain to correctly distinguish bare Escape from arrow-key sequences.
+**LinkedIn Angle:** "Why I stripped all color from my CLI tool's UI — and how a top-to-bottom white gradient replaced it without losing any visual depth."

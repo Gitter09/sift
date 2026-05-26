@@ -70,7 +70,7 @@ def get_scraper(source: str, settings: Settings) -> Optional[BaseScraper]:
 
 def get_all_scrapers(settings: Settings) -> List[BaseScraper]:
     scrapers: List[BaseScraper] = []
-    for source in settings.sources.default_sources:
+    for source in default_sources(settings):
         scraper = get_scraper(source, settings)
         if scraper:
             scrapers.append(scraper)
@@ -82,4 +82,27 @@ def default_sources(settings: Settings) -> List[str]:
         source
         for source in settings.sources.default_sources
         if source not in settings.sources.disabled_sources
+        and is_source_configured(source, settings)
     ]
+
+
+def is_source_configured(source: str, settings: Settings) -> bool:
+    if source == "reddit":
+        return bool(settings.reddit.client_id and settings.reddit.client_secret)
+    if source == "app_store":
+        return bool(settings.app_store.app_ids)
+    if source == "play_store":
+        return bool(settings.play_store.package_names)
+    if source == "youtube":
+        return bool(settings.youtube.api_key and settings.youtube.video_ids)
+    if source == "github_issues":
+        return bool(settings.github_issues.repos)
+    if source == "support_forums":
+        return bool(settings.support_forums.search_urls)
+    if source == "changelogs":
+        return bool(settings.changelogs.urls or settings.changelogs.search_urls)
+    if source == "discord_exports":
+        return bool(settings.discord_exports.paths or settings.discord_exports.urls)
+    if source == "linkedin_comments":
+        return bool(settings.linkedin_comments.paths or settings.linkedin_comments.urls)
+    return source in {"g2", "hacker_news", "product_hunt"}

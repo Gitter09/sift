@@ -1,4 +1,10 @@
-from src.config import RedditConfig, G2Config, SourcesConfig
+from src.config import (
+    AppStoreConfig,
+    GitHubIssuesConfig,
+    RedditConfig,
+    G2Config,
+    SourcesConfig,
+)
 from src.scrapers.reddit import RedditScraper
 from src.scrapers.g2 import G2Scraper
 from src.scrapers.factory import default_sources, get_scraper, get_all_scrapers
@@ -65,6 +71,22 @@ def test_factory_all_scrapers_uses_default_non_reddit_sources():
     names = [scraper.source_name for scraper in scrapers]
     assert "reddit" not in names
     assert names == default_sources(settings)
+    assert "app_store" not in names
+    assert "youtube" not in names
+
+
+def test_default_sources_include_configured_sources_only():
+    settings = Settings(
+        app_store=AppStoreConfig(app_ids={"Notion": "1232780281"}),
+        github_issues=GitHubIssuesConfig(repos={"VS Code": ["microsoft/vscode"]}),
+    )
+    sources = default_sources(settings)
+    assert "g2" in sources
+    assert "hacker_news" in sources
+    assert "product_hunt" in sources
+    assert "app_store" in sources
+    assert "github_issues" in sources
+    assert "play_store" not in sources
 
 
 def test_factory_can_reactivate_reddit_when_enabled():

@@ -16,11 +16,11 @@ Cluster representative quotes:
 Total items in this cluster: {size}
 
 Provide your analysis in this exact JSON format:
-{
+{{
   "label": "short descriptive name for this complaint theme (3-5 words)",
   "summary": "2-3 sentence summary of the pain point this cluster represents",
   "severity": "high|medium|low (based on frequency and emotional intensity)"
-}
+}}
 
 Respond only with the JSON, no additional text."""
 
@@ -34,25 +34,39 @@ Cluster summaries:
 {cluster_summaries}
 
 Provide your analysis in this exact JSON format:
-{
+{{
   "overall_insights": "3-4 sentence overall assessment",
   "top_pain_points": ["pain point 1", "pain point 2", "pain point 3"]
-}
+}}
 
 Respond only with the JSON, no additional text."""
 
 
 class Analyzer:
     def __init__(self, config: LLMConfig):
-        self.client = OpenAI(
-            api_key=config.api_key,
-            base_url=config.base_url,
-        )
+        self.client = None
         self.model = config.model
         self.temperature = config.temperature
         self.max_tokens = config.max_tokens
+        self._unavailable_reason = ""
+        self._warned_unavailable = False
+
+        api_key = (config.api_key or "").strip()
+        if not api_key:
+            self._unavailable_reason = "LLM API key is not configured"
+            return
+
+        try:
+            self.client = OpenAI(
+                api_key=api_key,
+                base_url=config.base_url,
+            )
+        except Exception as exc:
+            self._unavailable_reason = f"LLM client setup failed: {exc}"
 
     def _call_llm(self, prompt: str) -> str:
+        if self.client is None:
+            raise RuntimeError(self._unavailable_reason or "LLM client is unavailable")
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
@@ -68,6 +82,10 @@ class Analyzer:
             size=cluster.size,
         )
 
+        if self.client is None:
+            self._warn_unavailable_once()
+            return self._apply_cluster_fallback(cluster, self._unavailable_reason)
+
         try:
             raw = self._call_llm(prompt)
             # Strip markdown code block markers if present
@@ -82,14 +100,14 @@ class Analyzer:
             cluster.label = result.get("label", "Unnamed cluster")
             cluster.summary = result.get("summary", "")
             cluster.severity = result.get("severity", "medium")
-        except Exception:
-            logger.exception(
-                "LLM analysis failed for cluster %d, using fallback labels.",
+        except Exception as exc:
+            logger.warning(
+                "LLM analysis failed for cluster %d (%s: %s), using fallback labels.",
                 cluster.cluster_id,
+                type(exc).__name__,
+                exc,
             )
-            cluster.label = f"Cluster {cluster.cluster_id}"
-            cluster.summary = "Analysis unavailable — LLM call failed"
-            cluster.severity = "medium"
+            self._apply_cluster_fallback(cluster, "LLM call failed")
 
         return cluster
 
@@ -99,6 +117,10 @@ class Analyzer:
         return clusters
 
     def generate_overall_insights(self, product: str, clusters: List[ClusterResult]) -> dict:
+        if self.client is None:
+            self._warn_unavailable_once()
+            return self._overall_fallback(clusters, self._unavailable_reason)
+
         summaries = "\n".join(
             f"- [{c.severity}] {c.label}: {c.summary} ({c.size} complaints)"
             for c in clusters
@@ -118,12 +140,33 @@ class Analyzer:
             raw = raw.strip()
 
             return json.loads(raw)
-        except Exception:
-            logger.exception(
-                "LLM overall insights generation failed for '%s', using cluster labels as fallback.",
+        except Exception as exc:
+            logger.warning(
+                "LLM overall insights generation failed for '%s' (%s: %s), using cluster labels as fallback.",
                 product,
+                type(exc).__name__,
+                exc,
             )
-            return {
-                "overall_insights": "Analysis unavailable — LLM call failed",
-                "top_pain_points": [c.label or f"Cluster {c.cluster_id}" for c in clusters[:3]],
-            }
+            return self._overall_fallback(clusters, "LLM call failed")
+
+    def _warn_unavailable_once(self) -> None:
+        if self._warned_unavailable:
+            return
+        logger.warning("%s; using fallback analysis.", self._unavailable_reason)
+        self._warned_unavailable = True
+
+    @staticmethod
+    def _apply_cluster_fallback(cluster: ClusterResult, reason: str) -> ClusterResult:
+        cluster.label = cluster.label or f"Cluster {cluster.cluster_id}"
+        cluster.summary = f"Analysis unavailable - {reason}"
+        cluster.severity = cluster.severity or "medium"
+        if not cluster.representative_quotes:
+            cluster.representative_quotes = [item.text[:200] for item in cluster.items[:3]]
+        return cluster
+
+    @staticmethod
+    def _overall_fallback(clusters: List[ClusterResult], reason: str) -> dict:
+        return {
+            "overall_insights": f"Analysis unavailable - {reason}",
+            "top_pain_points": [c.label or f"Cluster {c.cluster_id}" for c in clusters[:3]],
+        }

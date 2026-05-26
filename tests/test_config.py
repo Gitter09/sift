@@ -1,6 +1,7 @@
 import os
 import logging
 import tempfile
+from unittest.mock import patch
 from src.config import (
     load_settings, setup_logging, Settings,
     RedditConfig, G2Config, ClusteringConfig, LLMConfig, LoggingConfig,
@@ -8,7 +9,10 @@ from src.config import (
 
 
 def test_load_settings_defaults():
-    settings = load_settings()
+    with patch.dict(os.environ, {"LLM_BASE_URL": "", "LLM_MODEL": ""}, clear=False):
+        os.environ.pop("LLM_BASE_URL", None)
+        os.environ.pop("LLM_MODEL", None)
+        settings = load_settings()
     assert isinstance(settings, Settings)
     assert settings.clustering.embedding_model == "all-MiniLM-L12-v2"
     assert settings.g2.request_delay == 2.5
@@ -16,7 +20,7 @@ def test_load_settings_defaults():
     assert settings.reddit.target_rate_per_minute == 80
     assert settings.reddit.praw_ratelimit_seconds == 300
     assert settings.llm.base_url == "https://api.openai.com/v1"
-    assert settings.logging.level == "INFO"
+    assert settings.logging.level == "ERROR"
     assert "reddit" in settings.sources.disabled_sources
     assert "g2" in settings.sources.default_sources
     assert "hacker_news" in settings.sources.default_sources
@@ -60,7 +64,9 @@ llm:
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         f.write(yaml_content)
         f.flush()
-        settings = load_settings(f.name)
+        with patch.dict(os.environ, {"LLM_MODEL": ""}, clear=False):
+            os.environ.pop("LLM_MODEL", None)
+            settings = load_settings(f.name)
         assert settings.reddit.max_posts == 10
         assert settings.reddit.target_rate_per_minute == 40
         assert settings.sources.default_sources == ["g2", "hacker_news"]
@@ -87,7 +93,7 @@ def test_setup_logging():
     settings = load_settings()
     setup_logging(settings, verbose=False)
     src_logger = logging.getLogger("src")
-    assert src_logger.level == logging.INFO
+    assert src_logger.level == logging.ERROR
 
     setup_logging(settings, verbose=True)
     assert src_logger.level == logging.DEBUG

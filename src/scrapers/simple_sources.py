@@ -226,27 +226,75 @@ class HackerNewsScraper(RequestsScraper):
         return "hacker_news"
 
     def scrape(self, product_name: str) -> List[FeedbackItem]:
-        url = (
+        items: List[FeedbackItem] = []
+
+        # Search stories first, then fetch their comment trees. Direct HN
+        # comment search often misses product mentions when the story title
+        # carries the product name but individual comments do not.
+        story_url = (
             "https://hn.algolia.com/api/v1/search"
-            f"?query={quote_plus(product_name)}&tags={quote_plus(self.config.tags)}"
+            f"?query={quote_plus(product_name)}&tags=story"
+            f"&hitsPerPage={min(10, self.config.max_items)}"
+        )
+        story_data = self._get_json(story_url)
+        for hit in story_data.get("hits", []) if isinstance(story_data, dict) else []:
+            object_id = hit.get("objectID")
+            title = _html_to_text(hit.get("title") or hit.get("story_title") or "")
+            story_text = _html_to_text(hit.get("story_text") or "")
+            if title or story_text:
+                text = f"{title}\n\n{story_text}".strip()
+                if len(text) >= 20:
+                    items.append(self._feedback_from_hn_hit(product_name, hit, text))
+            if object_id:
+                items.extend(self._comments_for_story(product_name, object_id, title))
+            if len(items) >= self.config.max_items:
+                return items[: self.config.max_items]
+
+        comment_url = (
+            "https://hn.algolia.com/api/v1/search"
+            f"?query={quote_plus(product_name)}&tags=comment"
             f"&hitsPerPage={self.config.max_items}"
         )
-        data = self._get_json(url)
-        items: List[FeedbackItem] = []
-        for hit in data.get("hits", []) if isinstance(data, dict) else []:
-            text = _html_to_text(hit.get("comment_text") or hit.get("title") or hit.get("story_title") or "")
+        comment_data = self._get_json(comment_url)
+        for hit in comment_data.get("hits", []) if isinstance(comment_data, dict) else []:
+            text = _html_to_text(hit.get("comment_text") or "")
             if len(text) < 20:
                 continue
-            object_id = hit.get("objectID")
-            items.append(FeedbackItem(
+            items.append(self._feedback_from_hn_hit(product_name, hit, text))
+            if len(items) >= self.config.max_items:
+                break
+        return items[: self.config.max_items]
+
+    def _comments_for_story(
+        self, product_name: str, story_id: str, story_title: str
+    ) -> List[FeedbackItem]:
+        data = self._get_json(f"https://hn.algolia.com/api/v1/items/{story_id}")
+        if not isinstance(data, dict):
+            return []
+        return [
+            FeedbackItem(
                 source=self.source_name,
                 product=product_name,
                 text=text,
-                url=f"https://news.ycombinator.com/item?id={object_id}" if object_id else None,
-                date=_parse_datetime(hit.get("created_at")),
-                metadata={"points": hit.get("points"), "story_title": hit.get("story_title")},
-            ))
-        return items[: self.config.max_items]
+                url=f"https://news.ycombinator.com/item?id={comment_id}",
+                metadata={"story_id": story_id, "story_title": story_title},
+            )
+            for comment_id, text in _walk_hn_comments(data.get("children", []))
+            if len(text) >= 20
+        ]
+
+    def _feedback_from_hn_hit(
+        self, product_name: str, hit: dict, text: str
+    ) -> FeedbackItem:
+        object_id = hit.get("objectID")
+        return FeedbackItem(
+            source=self.source_name,
+            product=product_name,
+            text=text,
+            url=f"https://news.ycombinator.com/item?id={object_id}" if object_id else None,
+            date=_parse_datetime(hit.get("created_at")),
+            metadata={"points": hit.get("points"), "story_title": hit.get("story_title")},
+        )
 
 
 class GitHubIssuesScraper(RequestsScraper):
@@ -496,3 +544,14 @@ def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
 
 def _html_to_text(value: str) -> str:
     return re.sub(r"\s+", " ", BeautifulSoup(value, "html.parser").get_text(" ", strip=True)).strip()
+
+
+def _walk_hn_comments(children: list) -> Iterable[tuple[str, str]]:
+    for child in children:
+        if not isinstance(child, dict):
+            continue
+        text = _html_to_text(child.get("text") or "")
+        comment_id = str(child.get("id") or "")
+        if text:
+            yield comment_id, text
+        yield from _walk_hn_comments(child.get("children", []))

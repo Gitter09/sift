@@ -12,8 +12,10 @@ Tier 2: Playwright — real Chromium browser for sites that still block
 from __future__ import annotations
 
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from curl_cffi import requests as curl_requests
 
@@ -104,18 +106,10 @@ class BrowserFetcher:
             return None
 
         try:
-            if self._browser is None:
-                self._pw = sync_playwright().start()
-                self._browser = self._pw.chromium.launch(headless=True)
-                self._context = self._browser.new_context(user_agent=_PLAYWRIGHT_UA)
+            if self._asyncio_loop_running():
+                return self._fetch_playwright_in_thread(url, sync_playwright)
 
-            page = self._context.new_page()
-            try:
-                page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                html = page.content()
-                return HttpResponse(text=html, status_code=200)
-            finally:
-                page.close()
+            return self._fetch_playwright_reused(url, sync_playwright)
         except Exception:
             logger.debug("Playwright fetch failed for %s", url, exc_info=True)
             return None
@@ -144,6 +138,61 @@ class BrowserFetcher:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _asyncio_loop_running() -> bool:
+        try:
+            asyncio.get_running_loop()
+            return True
+        except RuntimeError:
+            return False
+
+    def _fetch_playwright_reused(
+        self, url: str, sync_playwright: Callable
+    ) -> HttpResponse:
+        if self._browser is None:
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(headless=True)
+            self._context = self._browser.new_context(user_agent=_PLAYWRIGHT_UA)
+
+        page = self._context.new_page()
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            html = page.content()
+            return HttpResponse(text=html, status_code=200)
+        finally:
+            page.close()
+
+    def _fetch_playwright_in_thread(
+        self, url: str, sync_playwright: Callable
+    ) -> HttpResponse:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                self._fetch_playwright_isolated,
+                url,
+                sync_playwright,
+            )
+            return future.result()
+
+    @staticmethod
+    def _fetch_playwright_isolated(
+        url: str, sync_playwright: Callable
+    ) -> HttpResponse:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(user_agent=_PLAYWRIGHT_UA)
+                try:
+                    page = context.new_page()
+                    try:
+                        page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                        return HttpResponse(text=page.content(), status_code=200)
+                    finally:
+                        page.close()
+                finally:
+                    context.close()
+            finally:
+                browser.close()
 
     @property
     def _curl(self) -> CurlCffiSession:

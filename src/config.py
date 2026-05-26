@@ -177,7 +177,7 @@ class LLMConfig:
 
 @dataclass
 class LoggingConfig:
-    level: str = "INFO"
+    level: str = "ERROR"
     format: str = "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
 
 
@@ -343,7 +343,7 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
         ),
         max_feedback_per_source=int(os.getenv("MAX_FEEDBACK_PER_SOURCE", "100")),
         logging=LoggingConfig(
-            level=yaml_data.get("logging", {}).get("level", "INFO"),
+            level=yaml_data.get("logging", {}).get("level", "ERROR"),
             format=yaml_data.get("logging", {}).get(
                 "format", "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
             ),

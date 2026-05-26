@@ -137,5 +137,5 @@ llm:
   max_tokens: 2000
 
 logging:
-  level: "INFO"
+  level: "ERROR"
   format: "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
