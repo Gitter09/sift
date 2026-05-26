@@ -157,3 +157,41 @@ This document chronicles every significant architectural decision made during th
 **Decision:** Added a `sources` config section with `default_sources` and `disabled_sources`, put `reddit` in `disabled_sources`, and expanded the source registry to include G2, App Store, Play Store, YouTube comments, Hacker News, GitHub issues, Product Hunt comments, public support forums, changelogs, public Discord exports, and LinkedIn comment exports. Sources that require product-specific IDs, repos, video IDs, forum URLs, or exported JSON now skip cleanly until configured.
 **Why:** Muting Reddit through configuration keeps the existing PRAW implementation intact and makes reactivation a one-line config change. A broader source portfolio keeps Sift useful during approval wait time, while explicit per-source config avoids brittle scraping guesses or unauthorized collection from channels that need exports or API keys.
 **LinkedIn Angle:** "What I did when an API approval blocked my roadmap: feature-flag the dependency, keep the interface stable, and widen the data portfolio instead of waiting."
+
+---
+
+## Decision 015: Rich-Powered Terminal UI Layer
+
+**Date:** 2026-05-26
+**Context:** The CLI used bare `click.echo()` and `print()` for all output — no progress bars, no formatted tables, no visual structure. Long-running pipeline steps (scraping, embedding, clustering, LLM analysis) gave zero feedback until completion.
+**Decision:** Added `rich>=13.0` as a dependency and created a dedicated UI layer at `src/ui/display.py` that wraps all terminal output: Sift ASCII banner, config summary panels, `ScrapeProgress` and `PipelineProgress` context managers (spinner + bar + elapsed time), cluster summary tables (sorted by severity with color-coded badges), comparison panels, and in-terminal markdown report preview. The display layer has zero coupling to pipeline code — `cli.py` is the only consumer.
+**Why:** Rich gives Droid/Hermes-level terminal polish without the async complexity of Textual or the infrastructure overhead of a React/Vite WebApp. A separate `src/ui/display.py` module keeps formatting concerns isolated from pipeline logic and makes it trivial to swap the presentation layer later (Textual TUI, WebApp API, or headless mode). Progress bars with elapsed time eliminate the "is it hung?" problem during long ML operations.
+**LinkedIn Angle:** "How I made my CLI tool look like a $10K dashboard with one Python library — and why a separate UI layer is the cheat code for terminal polish."
+
+---
+
+## Decision 016: Release-Gated Python Package Distribution
+
+**Date:** 2026-05-26
+**Context:** Users should be able to install Sift without cloning the repository, while maintainers need confidence that published artifacts are tested and installable.
+**Decision:** Added an explicit setuptools build backend and a GitHub Actions packaging workflow that runs the test suite on Python 3.11 and 3.12, builds both source distribution and wheel artifacts, validates metadata with Twine, smoke-tests the installed wheel through the `sift` CLI entry point, uploads package artifacts for every successful run, attaches packages to versioned GitHub Releases, and publishes to PyPI only from an explicit manual dispatch.
+**Why:** Separating test, build, smoke-test, GitHub Release, and PyPI jobs keeps the release chain auditable. GitHub Release assets provide an immediate no-clone download path. PyPI publishing remains manual because the `sift` project name already exists on PyPI and will require either ownership of that project or a unique package rename before trusted publishing can succeed.
+**LinkedIn Angle:** "The package release workflow I wish every CLI tool had: test it, build it, install the wheel, then publish only what actually runs."
+
+
+---
+
+## Decision 017: Two-Tier Anti-Bot Strategy — curl_cffi + Playwright Fallback
+
+**Date:** 2026-05-26
+**Context:** G2 and Product Hunt scrapers were getting 403 blocked by Cloudflare/Akamai bot detection on every request. User-Agent rotation and jitter alone were insufficient — Cloudflare now checks TLS/JA3 fingerprints at the network layer, which the standard `requests` library can't spoof.
+
+**Decision:** Implemented a two-tier anti-bot strategy:
+1. **Tier 1 — `curl_cffi`**: Replaced `requests.Session` with `curl_cffi.requests.Session(impersonate="chrome124")` which impersonates Chrome's TLS fingerprint at the libcurl level. Same technique used by Crawlee's HTTP crawler. Handles 90%+ of Cloudflare-protected sites.
+2. **Tier 2 — Playwright fallback**: On 403 responses, automatically launches a real Chromium browser via Playwright to fetch the page. The browser is launched once per scraper instance and reused across pages.
+
+Both tiers are configurable via `use_playwright_fallback` in `config.yaml` per-source (G2, Product Hunt).
+
+**Why:** `curl_cffi` is a lightweight drop-in replacement for `requests` — it adds ~5MB of shared libraries versus ~300MB for a full Chromium install. But some sites use advanced JS challenges that only a real browser can solve. The two-tier approach gives us the speed and simplicity of `curl_cffi` for most cases, with Playwright as a "nuclear option" when needed. This avoids the massive dependency footprint of tools like Browser-Use (AI agent, wrong paradigm), Firecrawl (full microservice platform, AGPL licensed), or Crawlee (Node.js, not Python) while using the same underlying anti-bot techniques.
+
+**LinkedIn Angle:** "How I bypassed Cloudflare bot detection with a 5MB Python library instead of a 300MB browser — and why two-tier anti-bot strategy beats a monolithic scraping framework."

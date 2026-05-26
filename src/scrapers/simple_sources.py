@@ -6,8 +6,8 @@ from datetime import datetime
 from typing import Any, Iterable, List, Optional
 from urllib.parse import quote_plus
 
-import requests
 from bs4 import BeautifulSoup
+from curl_cffi import requests as curl_requests
 
 from src.config import (
     AppStoreConfig,
@@ -22,6 +22,11 @@ from src.config import (
     YouTubeConfig,
 )
 from src.models.feedback import FeedbackItem
+from src.pipeline.http_client import (
+    CurlCffiSession,
+    BrowserFetcher,
+    HttpResponse,
+)
 from src.pipeline.rate_limiter import RateLimiter
 from src.scrapers.base import BaseScraper
 
@@ -29,34 +34,48 @@ logger = logging.getLogger(__name__)
 
 
 class RequestsScraper(BaseScraper):
-    def __init__(self, max_requests_per_minute: int = 20, request_delay: float = 1.0):
-        self.session = requests.Session()
+    def __init__(self, max_requests_per_minute: int = 20, request_delay: float = 1.0, use_playwright: bool = True):
+        self._curl_session = CurlCffiSession()
         jitter = max(0.1, request_delay)
         self.rate_limiter = RateLimiter(
             max_requests_per_minute=max_requests_per_minute,
             jitter_range=(max(0.1, jitter * 0.75), jitter * 1.25),
             max_retries=2,
         )
+        self._browser_fetcher = BrowserFetcher(self.rate_limiter, use_playwright=use_playwright)
 
     def _get_json(self, url: str, **kwargs) -> Optional[Any]:
         self.rate_limiter.wait()
         try:
-            resp = self.session.get(url, timeout=20, **kwargs)
+            resp = self._curl_session.get(url, timeout=20, **kwargs)
+            if resp is None:
+                logger.warning("%s connection failed for %s", self.source_name, url)
+                return None
             resp.raise_for_status()
             return resp.json()
-        except (requests.RequestException, ValueError) as e:
+        except Exception as e:
             logger.warning("%s failed to fetch JSON from %s: %s", self.source_name, url, e)
             return None
 
     def _get_html(self, url: str, **kwargs) -> Optional[BeautifulSoup]:
         self.rate_limiter.wait()
+
+        # Tier 1: curl_cffi
         try:
-            resp = self.session.get(url, timeout=20, **kwargs)
-            resp.raise_for_status()
-            return BeautifulSoup(resp.text, "html.parser")
-        except requests.RequestException as e:
-            logger.warning("%s failed to fetch HTML from %s: %s", self.source_name, url, e)
-            return None
+            resp = self._curl_session.get(url, timeout=20, **kwargs)
+            if resp is not None:
+                resp.raise_for_status()
+                return BeautifulSoup(resp.text, "html.parser")
+        except Exception as e:
+            logger.debug("%s curl_cffi fetch failed for %s: %s", self.source_name, url, e)
+
+        # Tier 2: Playwright fallback
+        pw_resp = self._browser_fetcher.fetch_playwright(url)
+        if pw_resp is not None:
+            return BeautifulSoup(pw_resp.text, "html.parser")
+
+        logger.warning("%s failed to fetch HTML from %s", self.source_name, url)
+        return None
 
 
 class AppStoreScraper(RequestsScraper):
@@ -273,7 +292,11 @@ class GitHubIssuesScraper(RequestsScraper):
 
 class ProductHuntScraper(RequestsScraper):
     def __init__(self, config: ProductHuntConfig):
-        super().__init__(config.max_requests_per_minute, config.request_delay)
+        super().__init__(
+            config.max_requests_per_minute,
+            config.request_delay,
+            use_playwright=config.use_playwright_fallback,
+        )
         self.config = config
 
     @property
@@ -402,10 +425,10 @@ class JsonExportScraper(BaseScraper):
 
         for url in self.urls:
             try:
-                resp = requests.get(url, timeout=20)
+                resp = curl_requests.get(url, timeout=20)
                 resp.raise_for_status()
                 items.extend(self._parse_records(resp.json(), product_name, url))
-            except (requests.RequestException, ValueError) as e:
+            except (curl_requests.RequestException, ValueError) as e:
                 logger.warning("%s failed to fetch export %s: %s", self.source_name, url, e)
         return items[: self.max_items]
 

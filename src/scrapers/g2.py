@@ -1,39 +1,41 @@
 import re
-import time
-import random
 import logging
-import requests
-from bs4 import BeautifulSoup
 from typing import List, Optional
-from datetime import datetime
-from src.models.feedback import FeedbackItem
-from src.scrapers.base import BaseScraper
+
+from bs4 import BeautifulSoup
+from curl_cffi import requests as curl_requests
+
 from src.config import G2Config
+from src.models.feedback import FeedbackItem
+from src.pipeline.http_client import (
+    CurlCffiSession,
+    BrowserFetcher,
+    HttpResponse,
+)
 from src.pipeline.rate_limiter import RateLimiter
+from src.scrapers.base import BaseScraper
 
 logger = logging.getLogger(__name__)
 
-USER_AGENTS = [
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
-]
+# Chrome 124 on macOS — matches the TLS fingerprint we impersonate
+_G2_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 
 class G2Scraper(BaseScraper):
-    # G2 rate limiting context:
-    #   - No official API, no published rate limits
-    #   - Protected by Cloudflare (8/10 bypass difficulty) + Akamai (9/10 bypass difficulty)
-    #   - ScrapeOps rates G2 9/10 overall scraping difficulty
-    #   - Practical safe threshold: ~10-15 req/min with delays + UA rotation
-    #   - Cloudflare triggers 429/403 if too many requests from same IP
-    #   - Without delays, blocks happen within 20-30 requests
+    """Scrape G2 reviews.
+
+    Uses a two-tier anti-bot strategy:
+
+    * **Tier 1**: ``curl_cffi`` with Chrome 124 TLS fingerprint impersonation.
+    * **Tier 2**: Playwright (real Chromium browser) fallback on 403 blocks.
+    """
 
     def __init__(self, config: G2Config):
         self.config = config
-        self.session = requests.Session()
+        self._curl_session = CurlCffiSession()
         self.rate_limiter = RateLimiter(
             max_requests_per_minute=config.max_requests_per_minute,
             jitter_range=config.jitter_range,
@@ -41,78 +43,89 @@ class G2Scraper(BaseScraper):
             max_backoff=config.max_backoff,
             max_retries=config.max_retries,
         )
+        self._browser_fetcher = BrowserFetcher(
+            self.rate_limiter,
+            use_playwright=config.use_playwright_fallback,
+        )
 
     @property
     def source_name(self) -> str:
         return "g2"
 
-    def _get_user_agent(self) -> str:
-        if self.config.user_agent_rotation:
-            return random.choice(USER_AGENTS)
-        return USER_AGENTS[0]
+    def _make_request(
+        self, url: str, headers: dict | None = None
+    ) -> Optional[curl_requests.Response | HttpResponse]:
+        """Make a request with two-tier anti-bot strategy.
 
-    def _make_request(self, url: str, headers: dict) -> Optional[requests.Response]:
-        """Make a request with rate limiting, exponential backoff on 429/403."""
+        Tier 1: curl_cffi with Chrome TLS impersonation.
+        Tier 2: Playwright (real Chromium) fallback on 403.
+        """
         max_retries = self.config.max_retries
-        for attempt in range(max_retries + 1):
+        total_attempts = max_retries + 1  # e.g. 3 retries = 4 total attempts
+
+        for attempt in range(total_attempts):
             self.rate_limiter.wait()
 
-            try:
-                resp = self.session.get(url, headers=headers, timeout=15)
-            except requests.RequestException as e:
-                if self.rate_limiter.should_retry(attempt):
-                    self.rate_limiter.backoff(attempt + 1, source="G2")
-                    continue
-                logger.error(
-                    "G2 request failed after %d attempt(s): %s", attempt + 1, e,
-                )
-                return None
+            # --- Tier 1: curl_cffi ----------------------------------------
+            resp = self._curl_session.get(url, headers=headers, timeout=15)
 
-            if resp.status_code == 429:
+            if resp is not None and resp.status_code == 200:
+                return resp
+
+            if resp is None:
                 logger.warning(
-                    "G2 rate limited (429) on attempt %d/%d. "
-                    "G2's Cloudflare protection is throttling requests.",
-                    attempt + 1, max_retries,
+                    "G2 connection failed on attempt %d/%d",
+                    attempt + 1, total_attempts,
                 )
-                if self.rate_limiter.should_retry(attempt):
-                    self.rate_limiter.backoff(attempt + 1, source="G2")
-                    continue
-                logger.error("G2 max retries exceeded for 429 on %s", url)
-                return None
 
-            if resp.status_code == 403:
+            elif resp.status_code == 429:
                 logger.warning(
-                    "G2 blocked (403) on attempt %d/%d — likely Cloudflare/Akamai bot detection.",
-                    attempt + 1, max_retries,
+                    "G2 rate limited (429) on attempt %d/%d",
+                    attempt + 1, total_attempts,
                 )
-                if self.rate_limiter.should_retry(attempt):
-                    self.rate_limiter.backoff(attempt + 1, source="G2")
-                    continue
-                logger.error("G2 max retries exceeded for 403 on %s", url)
-                return None
 
-            try:
-                resp.raise_for_status()
-            except requests.HTTPError as e:
-                if self.rate_limiter.should_retry(attempt):
-                    self.rate_limiter.backoff(attempt + 1, source="G2")
-                    continue
-                logger.error(
-                    "G2 HTTP error after %d attempt(s): %s", attempt + 1, e,
+            elif resp.status_code == 403:
+                logger.warning(
+                    "G2 blocked (403) on attempt %d/%d — "
+                    "Cloudflare/Akamai bot detection",
+                    attempt + 1, total_attempts,
                 )
-                return None
+                # Try Playwright immediately on first 403 — no point
+                # retrying curl_cffi when it's being TLS-fingerprinted.
+                if attempt == 0:
+                    pw_resp = self._browser_fetcher.fetch_playwright(url)
+                    if pw_resp is not None:
+                        logger.info(
+                            "G2 Playwright fallback succeeded for %s", url,
+                        )
+                        return pw_resp
 
-            return resp
+            else:
+                logger.warning(
+                    "G2 HTTP %d on attempt %d/%d",
+                    resp.status_code, attempt + 1, total_attempts,
+                )
+
+            # --- Backoff / retry -------------------------------------------
+            if self.rate_limiter.should_retry(attempt):
+                self.rate_limiter.backoff(attempt + 1, source="G2")
+                continue
+
+            logger.error("G2 max retries exceeded for %s", url)
+            return None
 
         return None
 
     def _get_product_url(self, product_name: str) -> Optional[str]:
         slug = product_name.lower().replace(" ", "-")
         search_url = f"https://www.g2.com/search?query={product_name}"
-        headers = {"User-Agent": self._get_user_agent()}
+        headers = {"User-Agent": _G2_USER_AGENT}
         resp = self._make_request(search_url, headers)
         if not resp:
-            logger.warning("G2 could not reach search page for '%s', guessing product URL", product_name)
+            logger.warning(
+                "G2 could not reach search page for '%s', guessing product URL",
+                product_name,
+            )
             return f"https://www.g2.com/products/{slug}"
 
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -133,13 +146,16 @@ class G2Scraper(BaseScraper):
             logger.warning("G2 could not find product page for '%s'", product_name)
             return items
 
+        headers = {"User-Agent": _G2_USER_AGENT}
         for page in range(1, self.config.max_pages + 1):
             url = f"{product_url}/reviews?page={page}"
-            headers = {"User-Agent": self._get_user_agent()}
 
             resp = self._make_request(url, headers)
             if not resp:
-                logger.warning("G2 failed to fetch page %d for '%s', stopping pagination", page, product_name)
+                logger.warning(
+                    "G2 failed to fetch page %d for '%s', stopping pagination",
+                    page, product_name,
+                )
                 break
 
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -149,7 +165,10 @@ class G2Scraper(BaseScraper):
                 review_elements = soup.select("div[itemprop='review']")
 
             if not review_elements:
-                logger.info("G2 no reviews found on page %d for '%s', stopping pagination", page, product_name)
+                logger.info(
+                    "G2 no reviews found on page %d for '%s', stopping pagination",
+                    page, product_name,
+                )
                 break
 
             for review_el in review_elements:
@@ -167,7 +186,9 @@ class G2Scraper(BaseScraper):
                 rating_el = review_el.select_one("[itemprop='ratingValue']")
                 if rating_el:
                     try:
-                        rating = float(rating_el.get("content", rating_el.get_text(strip=True)))
+                        rating = float(
+                            rating_el.get("content", rating_el.get_text(strip=True))
+                        )
                     except (ValueError, TypeError):
                         pass
 

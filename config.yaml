@@ -46,6 +46,8 @@ g2:
   max_backoff: 60.0
   max_retries: 3
   jitter_range: [0.5, 1.5]
+  # Fall back to Playwright (real Chromium) when curl_cffi gets 403
+  use_playwright_fallback: true
 
 app_store:
   # Map product names to Apple numeric app IDs, e.g. "Notion": "1232780281"
@@ -92,6 +94,8 @@ product_hunt:
   max_items: 50
   request_delay: 2.0
   max_requests_per_minute: 20
+  # Fall back to Playwright (real Chromium) when curl_cffi gets 403
+  use_playwright_fallback: true
 
 support_forums:
   # URL templates can use {query} or {product}, e.g. "https://community.example.com/search?q={query}"

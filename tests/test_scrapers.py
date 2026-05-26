@@ -18,19 +18,17 @@ def test_g2_scraper_source_name():
 
 
 def test_g2_user_agent_rotation():
-    config = G2Config(user_agent_rotation=True)
+    config = G2Config(user_agent_rotation=True, use_playwright_fallback=True)
     scraper = G2Scraper(config)
-    ua1 = scraper._get_user_agent()
-    ua2 = scraper._get_user_agent()
-    # With rotation, should eventually get different UAs (statistically)
-    assert ua1.startswith("Mozilla/5.0")
+    assert scraper.config.use_playwright_fallback is True
+    assert scraper.source_name == "g2"
 
 
 def test_g2_no_rotation():
-    config = G2Config(user_agent_rotation=False)
+    config = G2Config(user_agent_rotation=False, use_playwright_fallback=False)
     scraper = G2Scraper(config)
-    ua = scraper._get_user_agent()
-    assert ua.startswith("Mozilla/5.0")
+    assert scraper.config.use_playwright_fallback is False
+    assert scraper.source_name == "g2"
 
 
 def test_factory_get_scraper():

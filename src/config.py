@@ -62,6 +62,8 @@ class G2Config:
     max_retries: int = 3
     # Jitter multiplier range applied to request_delay
     jitter_range: tuple = (0.5, 1.5)
+    # Fall back to Playwright (real Chromium) when curl_cffi gets 403
+    use_playwright_fallback: bool = True
 
 
 @dataclass
@@ -116,6 +118,8 @@ class ProductHuntConfig:
     max_items: int = 50
     request_delay: float = 2.0
     max_requests_per_minute: int = 20
+    # Fall back to Playwright (real Chromium) when curl_cffi gets 403
+    use_playwright_fallback: bool = True
 
 
 @dataclass
@@ -251,6 +255,7 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             max_backoff=g2_raw.get("max_backoff", 60.0),
             max_retries=g2_raw.get("max_retries", 3),
             jitter_range=g2_jitter,
+            use_playwright_fallback=g2_raw.get("use_playwright_fallback", True),
         ),
         app_store=AppStoreConfig(
             app_ids=app_store_raw.get("app_ids", {}),
@@ -293,6 +298,7 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             max_items=product_hunt_raw.get("max_items", 50),
             request_delay=product_hunt_raw.get("request_delay", 2.0),
             max_requests_per_minute=product_hunt_raw.get("max_requests_per_minute", 20),
+            use_playwright_fallback=product_hunt_raw.get("use_playwright_fallback", True),
         ),
         support_forums=SupportForumsConfig(
             search_urls=support_forums_raw.get("search_urls", []),
