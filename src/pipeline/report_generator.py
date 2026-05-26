@@ -1,8 +1,11 @@
 import json
+import logging
 import os
 from datetime import datetime
 from typing import Dict
 from src.models.report import ProductReport, ComparisonReport
+
+logger = logging.getLogger(__name__)
 
 
 def generate_markdown_report(report: ProductReport) -> str:
@@ -85,19 +88,19 @@ def save_reports(
         md_path = os.path.join(output_dir, f"{slug}_{timestamp}.md")
         with open(md_path, "w") as f:
             f.write(generate_markdown_report(report))
-        print(f"[Report] Saved markdown: {md_path}")
+        logger.info("Saved markdown report: %s", md_path)
 
         json_path = os.path.join(output_dir, f"{slug}_{timestamp}.json")
         with open(json_path, "w") as f:
             json.dump(report.to_dict(), f, indent=2)
-        print(f"[Report] Saved JSON: {json_path}")
+        logger.info("Saved JSON report: %s", json_path)
 
     md_path = os.path.join(output_dir, f"comparison_{timestamp}.md")
     with open(md_path, "w") as f:
         f.write(generate_comparison_markdown(comparison_report))
-    print(f"[Report] Saved comparison markdown: {md_path}")
+    logger.info("Saved comparison markdown: %s", md_path)
 
     json_path = os.path.join(output_dir, f"comparison_{timestamp}.json")
     with open(json_path, "w") as f:
         json.dump(comparison_report.to_dict(), f, indent=2)
-    print(f"[Report] Saved comparison JSON: {json_path}")
+    logger.info("Saved comparison JSON: %s", json_path)

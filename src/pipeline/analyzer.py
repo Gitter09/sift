@@ -1,7 +1,11 @@
+import json
+import logging
 from typing import List
 from openai import OpenAI
 from src.models.cluster import ClusterResult
 from src.config import LLMConfig
+
+logger = logging.getLogger(__name__)
 
 
 ANALYZE_CLUSTER_PROMPT = """You are a product research analyst. Analyze this cluster of user feedback/complaints about a product.
@@ -66,7 +70,6 @@ class Analyzer:
 
         try:
             raw = self._call_llm(prompt)
-            import json
             # Strip markdown code block markers if present
             raw = raw.strip()
             if raw.startswith("```"):
@@ -79,10 +82,13 @@ class Analyzer:
             cluster.label = result.get("label", "Unnamed cluster")
             cluster.summary = result.get("summary", "")
             cluster.severity = result.get("severity", "medium")
-        except Exception as e:
-            print(f"[Analyzer] LLM parsing failed for cluster {cluster.cluster_id}: {e}")
+        except Exception:
+            logger.exception(
+                "LLM analysis failed for cluster %d, using fallback labels.",
+                cluster.cluster_id,
+            )
             cluster.label = f"Cluster {cluster.cluster_id}"
-            cluster.summary = "Analysis unavailable"
+            cluster.summary = "Analysis unavailable — LLM call failed"
             cluster.severity = "medium"
 
         return cluster
@@ -104,7 +110,6 @@ class Analyzer:
 
         try:
             raw = self._call_llm(prompt)
-            import json
             raw = raw.strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
@@ -113,9 +118,12 @@ class Analyzer:
             raw = raw.strip()
 
             return json.loads(raw)
-        except Exception as e:
-            print(f"[Analyzer] Overall insights LLM call failed: {e}")
+        except Exception:
+            logger.exception(
+                "LLM overall insights generation failed for '%s', using cluster labels as fallback.",
+                product,
+            )
             return {
-                "overall_insights": "Analysis unavailable",
-                "top_pain_points": [c.label for c in clusters[:3]],
+                "overall_insights": "Analysis unavailable — LLM call failed",
+                "top_pain_points": [c.label or f"Cluster {c.cluster_id}" for c in clusters[:3]],
             }

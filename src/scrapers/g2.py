@@ -1,6 +1,7 @@
 import re
 import time
 import random
+import logging
 import requests
 from bs4 import BeautifulSoup
 from typing import List, Optional
@@ -8,6 +9,9 @@ from datetime import datetime
 from src.models.feedback import FeedbackItem
 from src.scrapers.base import BaseScraper
 from src.config import G2Config
+from src.pipeline.rate_limiter import RateLimiter
+
+logger = logging.getLogger(__name__)
 
 USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -19,9 +23,24 @@ USER_AGENTS = [
 
 
 class G2Scraper(BaseScraper):
+    # G2 rate limiting context:
+    #   - No official API, no published rate limits
+    #   - Protected by Cloudflare (8/10 bypass difficulty) + Akamai (9/10 bypass difficulty)
+    #   - ScrapeOps rates G2 9/10 overall scraping difficulty
+    #   - Practical safe threshold: ~10-15 req/min with delays + UA rotation
+    #   - Cloudflare triggers 429/403 if too many requests from same IP
+    #   - Without delays, blocks happen within 20-30 requests
+
     def __init__(self, config: G2Config):
         self.config = config
         self.session = requests.Session()
+        self.rate_limiter = RateLimiter(
+            max_requests_per_minute=config.max_requests_per_minute,
+            jitter_range=config.jitter_range,
+            backoff_base=config.backoff_base,
+            max_backoff=config.max_backoff,
+            max_retries=config.max_retries,
+        )
 
     @property
     def source_name(self) -> str:
@@ -32,16 +51,69 @@ class G2Scraper(BaseScraper):
             return random.choice(USER_AGENTS)
         return USER_AGENTS[0]
 
+    def _make_request(self, url: str, headers: dict) -> Optional[requests.Response]:
+        """Make a request with rate limiting, exponential backoff on 429/403."""
+        max_retries = self.config.max_retries
+        for attempt in range(max_retries + 1):
+            self.rate_limiter.wait()
+
+            try:
+                resp = self.session.get(url, headers=headers, timeout=15)
+            except requests.RequestException as e:
+                if self.rate_limiter.should_retry(attempt):
+                    self.rate_limiter.backoff(attempt + 1, source="G2")
+                    continue
+                logger.error(
+                    "G2 request failed after %d attempt(s): %s", attempt + 1, e,
+                )
+                return None
+
+            if resp.status_code == 429:
+                logger.warning(
+                    "G2 rate limited (429) on attempt %d/%d. "
+                    "G2's Cloudflare protection is throttling requests.",
+                    attempt + 1, max_retries,
+                )
+                if self.rate_limiter.should_retry(attempt):
+                    self.rate_limiter.backoff(attempt + 1, source="G2")
+                    continue
+                logger.error("G2 max retries exceeded for 429 on %s", url)
+                return None
+
+            if resp.status_code == 403:
+                logger.warning(
+                    "G2 blocked (403) on attempt %d/%d — likely Cloudflare/Akamai bot detection.",
+                    attempt + 1, max_retries,
+                )
+                if self.rate_limiter.should_retry(attempt):
+                    self.rate_limiter.backoff(attempt + 1, source="G2")
+                    continue
+                logger.error("G2 max retries exceeded for 403 on %s", url)
+                return None
+
+            try:
+                resp.raise_for_status()
+            except requests.HTTPError as e:
+                if self.rate_limiter.should_retry(attempt):
+                    self.rate_limiter.backoff(attempt + 1, source="G2")
+                    continue
+                logger.error(
+                    "G2 HTTP error after %d attempt(s): %s", attempt + 1, e,
+                )
+                return None
+
+            return resp
+
+        return None
+
     def _get_product_url(self, product_name: str) -> Optional[str]:
         slug = product_name.lower().replace(" ", "-")
         search_url = f"https://www.g2.com/search?query={product_name}"
         headers = {"User-Agent": self._get_user_agent()}
-        try:
-            resp = self.session.get(search_url, headers=headers, timeout=10)
-            resp.raise_for_status()
-        except requests.RequestException as e:
-            print(f"[G2] Search request failed: {e}")
-            return None
+        resp = self._make_request(search_url, headers)
+        if not resp:
+            logger.warning("G2 could not reach search page for '%s', guessing product URL", product_name)
+            return f"https://www.g2.com/products/{slug}"
 
         soup = BeautifulSoup(resp.text, "html.parser")
         result_links = soup.select("a[href*='/products/']")
@@ -58,30 +130,26 @@ class G2Scraper(BaseScraper):
         product_url = self._get_product_url(product_name)
 
         if not product_url:
-            print(f"[G2] Could not find product page for '{product_name}'")
+            logger.warning("G2 could not find product page for '%s'", product_name)
             return items
 
         for page in range(1, self.config.max_pages + 1):
             url = f"{product_url}/reviews?page={page}"
             headers = {"User-Agent": self._get_user_agent()}
 
-            try:
-                time.sleep(self.config.request_delay)
-                resp = self.session.get(url, headers=headers, timeout=15)
-                resp.raise_for_status()
-            except requests.RequestException as e:
-                print(f"[G2] Request failed for page {page}: {e}")
+            resp = self._make_request(url, headers)
+            if not resp:
+                logger.warning("G2 failed to fetch page %d for '%s', stopping pagination", page, product_name)
                 break
 
             soup = BeautifulSoup(resp.text, "html.parser")
             review_elements = soup.select("[class*='review']")
 
             if not review_elements:
-                # Try alternative selectors
                 review_elements = soup.select("div[itemprop='review']")
 
             if not review_elements:
-                print(f"[G2] No reviews found on page {page}, stopping pagination")
+                logger.info("G2 no reviews found on page %d for '%s', stopping pagination", page, product_name)
                 break
 
             for review_el in review_elements:
@@ -103,7 +171,6 @@ class G2Scraper(BaseScraper):
                     except (ValueError, TypeError):
                         pass
 
-                # Also try star rating from class names
                 if rating is None:
                     star_el = review_el.select_one("[class*='stars']")
                     if star_el:
@@ -113,23 +180,17 @@ class G2Scraper(BaseScraper):
                             if match:
                                 rating = float(match.group(1))
 
-                author = None
-                author_el = review_el.select_one("[itemprop='author']")
-                if author_el:
-                    author = author_el.get_text(strip=True)
-
                 items.append(FeedbackItem(
                     source=self.source_name,
                     product=product_name,
                     text=text,
                     rating=rating,
                     url=url,
-                    author=author,
                     metadata={"page": page},
                 ))
 
             if len(items) >= 50:
                 break
 
-        print(f"[G2] Collected {len(items)} reviews for '{product_name}'")
+        logger.info("G2: collected %d reviews for '%s'", len(items), product_name)
         return items

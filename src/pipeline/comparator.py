@@ -1,7 +1,11 @@
+import json
+import logging
 from typing import List, Dict
 from openai import OpenAI
 from src.models.report import ProductReport, ComparisonReport
 from src.config import LLMConfig
+
+logger = logging.getLogger(__name__)
 
 
 COMPARISON_PROMPT = """You are a competitive product analyst. Compare these products based on their pain points and user feedback.
@@ -66,7 +70,6 @@ class Comparator:
 
         try:
             raw = self._call_llm(prompt)
-            import json
             raw = raw.strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
@@ -82,8 +85,11 @@ class Comparator:
                 unique_pain_points=result.get("unique_pain_points", {}),
                 competitive_insights=result.get("competitive_insights", ""),
             )
-        except Exception as e:
-            print(f"[Comparator] LLM comparison failed: {e}")
+        except Exception:
+            logger.exception(
+                "LLM comparison failed for %s, using cluster label intersection as fallback.",
+                ", ".join(products),
+            )
             # Fallback: compute basic comparison from cluster labels
             all_labels: Dict[str, List[str]] = {
                 name: [c.label for c in report.clusters]

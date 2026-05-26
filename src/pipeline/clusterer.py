@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 from typing import List, Dict
 from umap import UMAP
@@ -5,6 +6,8 @@ import hdbscan
 from src.models.feedback import FeedbackItem
 from src.models.cluster import ClusterResult
 from src.config import ClusteringConfig
+
+logger = logging.getLogger(__name__)
 
 
 class Clusterer:
@@ -25,7 +28,7 @@ class Clusterer:
 
     def cluster(self, embeddings: np.ndarray, items: List[FeedbackItem]) -> List[ClusterResult]:
         if len(items) < 3:
-            print("[Clusterer] Too few items to cluster (< 3), returning single group")
+            logger.warning("Too few items to cluster (%d), returning single group.", len(items))
             return [ClusterResult(cluster_id=0, items=items)]
 
         reduced = self.umap.fit_transform(embeddings)
@@ -54,7 +57,7 @@ class Clusterer:
         )
         noise = clusters.get(-1)
         if noise and noise.size > 0:
-            print(f"[Clusterer] {noise.size} items classified as noise (no clear theme)")
+            logger.debug("%d items classified as noise (no clear theme).", noise.size)
 
-        print(f"[Clusterer] Found {len(result)} clusters")
+        logger.info("Found %d clusters from %d items.", len(result), len(items))
         return result

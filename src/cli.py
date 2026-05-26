@@ -1,7 +1,12 @@
 import json
+import logging
+import os
+
 import click
-from src.config import load_settings
-from src.scrapers.factory import get_scraper, get_all_scrapers
+
+from src.config import load_settings, setup_logging
+from src.scrapers.factory import get_scraper
+from src.pipeline.dedup import DedupFilter
 from src.pipeline.embedder import Embedder
 from src.pipeline.clusterer import Clusterer
 from src.pipeline.analyzer import Analyzer
@@ -10,11 +15,22 @@ from src.pipeline.report_generator import save_reports
 from src.models.feedback import FeedbackItem
 from src.models.report import ProductReport
 
+logger = logging.getLogger(__name__)
+
+# Shared verbose option decorator
+_verbose_option = click.option(
+    "--verbose", "-v", is_flag=True, default=False,
+    help="Enable debug-level logging output.",
+)
+
 
 @click.group()
-def main():
+@_verbose_option
+@click.pass_context
+def main(ctx, verbose):
     """Sift - scrape, cluster, and analyze product feedback."""
-    pass
+    ctx.ensure_object(dict)
+    ctx.obj["verbose"] = verbose
 
 
 @main.command()
@@ -22,25 +38,42 @@ def main():
 @click.option("--source", "-s", multiple=True, help="Data source to use (reddit, g2). Default: all available.")
 @click.option("--config", "-c", default="config.yaml", help="Path to config file.")
 @click.option("--output", "-o", default="output", help="Output directory for reports.")
-def analyze(products, source, config, output):
+@_verbose_option
+@click.pass_context
+def analyze(ctx, products, source, config, output, verbose):
     """Analyze feedback for one or more products."""
     settings = load_settings(config)
+    setup_logging(settings, verbose=verbose)
     sources = list(source) if source else ["reddit", "g2"]
 
+    dedup = DedupFilter()
     all_feedback: dict[str, list[FeedbackItem]] = {}
+
     for product in products:
-        feedback = []
+        feedback: list[FeedbackItem] = []
         for src in sources:
             scraper = get_scraper(src, settings)
             if scraper:
-                print(f"[Scrape] Collecting {src} feedback for '{product}'...")
-                items = scraper.scrape(product)
-                feedback.extend(items)
+                click.echo(f"Scraping {src} feedback for '{product}'...")
+                try:
+                    items = scraper.scrape(product)
+                    feedback.extend(items)
+                except Exception:
+                    logger.exception("Scraper '%s' failed for '%s'.", src, product)
+                    click.echo(
+                        f"[WARNING] {src} scraper encountered an error for '{product}'. "
+                        f"Check logs for details.", err=True,
+                    )
             else:
-                print(f"[Scrape] No scraper available for '{src}'")
+                click.echo(f"No scraper available for '{src}'", err=True)
 
-        all_feedback[product] = feedback[:settings.max_feedback_per_source]
-        print(f"[Scrape] Total feedback for '{product}': {len(all_feedback[product])}")
+        # Deduplicate and cap
+        feedback = dedup.filter(feedback)
+        if len(feedback) > settings.max_feedback_per_source:
+            feedback = feedback[:settings.max_feedback_per_source]
+
+        all_feedback[product] = feedback
+        click.echo(f"Collected {len(feedback)} unique {', '.join(sources)} items for '{product}'.")
 
     embedder = Embedder(settings.clustering)
     clusterer = Clusterer(settings.clustering)
@@ -50,16 +83,19 @@ def analyze(products, source, config, output):
     product_reports = {}
     for product, feedback in all_feedback.items():
         if len(feedback) < 3:
-            print(f"[Pipeline] Too few feedback items for '{product}' ({len(feedback)}), skipping analysis")
+            click.echo(
+                f"[SKIP] Too few feedback items for '{product}' ({len(feedback)}), "
+                f"need at least 3 for analysis.", err=True,
+            )
             continue
 
-        print(f"[Pipeline] Embedding {len(feedback)} feedback items for '{product}'...")
+        click.echo(f"[{product}] Generating embeddings for {len(feedback)} items...")
         embeddings = embedder.embed(feedback)
 
-        print(f"[Pipeline] Clustering embeddings...")
+        click.echo(f"[{product}] Clustering feedback...")
         clusters = clusterer.cluster(embeddings, feedback)
 
-        print(f"[Pipeline] Analyzing {len(clusters)} clusters with LLM...")
+        click.echo(f"[{product}] Analyzing {len(clusters)} clusters with LLM...")
         clusters = analyzer.analyze_clusters(clusters)
 
         insights = analyzer.generate_overall_insights(product, clusters)
@@ -73,7 +109,7 @@ def analyze(products, source, config, output):
         product_reports[product] = report
 
     if len(product_reports) >= 2:
-        print(f"[Pipeline] Generating multi-product comparison...")
+        click.echo("Generating multi-product comparison...")
         comparison = comparator.compare(product_reports)
     else:
         from src.models.report import ComparisonReport
@@ -87,38 +123,46 @@ def analyze(products, source, config, output):
         )
 
     save_reports(product_reports, comparison, output)
-    print(f"\n[Done] Reports saved to '{output}/' directory")
+    click.echo(f"\nDone! Reports saved to '{output}/' directory")
 
 
-@main.command()
+@main.command("scrape")
 @click.argument("product")
 @click.option("--source", "-s", multiple=True, help="Data source (reddit, g2).")
 @click.option("--config", "-c", default="config.yaml", help="Path to config file.")
 @click.option("--output", "-o", default="output", help="Output directory.")
-def scrape_cmd(product, source, config, output):
-    """Just scrape feedback for a product (no analysis)."""
+@_verbose_option
+@click.pass_context
+def scrape_cmd(ctx, product, source, config, output, verbose):
+    """Scrape feedback for a product (no analysis)."""
     settings = load_settings(config)
+    setup_logging(settings, verbose=verbose)
     sources = list(source) if source else ["reddit", "g2"]
 
-    feedback = []
+    dedup = DedupFilter()
+    feedback: list[FeedbackItem] = []
     for src in sources:
         scraper = get_scraper(src, settings)
         if scraper:
-            print(f"[Scrape] Collecting {src} feedback for '{product}'...")
-            items = scraper.scrape(product)
-            feedback.extend(items)
+            click.echo(f"Scraping {src} feedback for '{product}'...")
+            try:
+                items = scraper.scrape(product)
+                feedback.extend(items)
+            except Exception:
+                logger.exception("Scraper '%s' failed for '%s'.", src, product)
+                click.echo(
+                    f"[WARNING] {src} scraper encountered an error for '{product}'. "
+                    f"Check logs for details.", err=True,
+                )
 
-    import os
+    feedback = dedup.filter(feedback)
+
     os.makedirs(output, exist_ok=True)
     slug = product.lower().replace(" ", "_")
     path = os.path.join(output, f"{slug}_raw.json")
     with open(path, "w") as f:
         json.dump([item.to_dict() for item in feedback], f, indent=2)
-    print(f"[Scrape] Saved {len(feedback)} items to {path}")
-
-
-# Rename command to "scrape" for CLI display
-scrape_cmd.name = "scrape"
+    click.echo(f"Saved {len(feedback)} unique items to {path}")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@
 ## What It Does
 
 - **Scrapes** Reddit and G2 for real user feedback about any product
+- **Anonymizes** reviews at ingestion — no usernames stored, only a clickable link to the source
+- **Deduplicates** feedback across sources using hash-based IDs so you never count the same review twice
 - **Clusters** complaints and pain points using sentence embeddings + UMAP + HDBSCAN
 - **Analyzes** each cluster with an LLM to name themes, summarize issues, and rate severity
 - **Compares** multiple products to surface shared vs. unique pain points
@@ -13,11 +15,11 @@
 
 ```
 Reddit (PRAW API) ──┐
-                     ├──> Feedback Items ──> Sentence Embeddings ──> UMAP + HDBSCAN
-G2 (Web Scraping) ──┘                             (all-MiniLM-L12-v2)
+                     ├──> Feedback Items ──> Dedup Filter ──> Sentence Embeddings ──> UMAP + HDBSCAN
+G2 (Web Scraping) ──┘        (anonymized)                                              (all-MiniLM-L12-v2)
 
-                            ┌── Clustered Themes ──> LLM Analysis ──> Report (MD + JSON)
-Multi-Product Comparison <──┘
+                                          ┌── Clustered Themes ──> LLM Analysis ──> Report (MD + JSON)
+              Multi-Product Comparison <──┘
 ```
 
 ## Quick Start
@@ -51,6 +53,9 @@ python -m src.cli analyze "Figma" "Sketch" "Penpot"
 python -m src.cli analyze "Notion" --source reddit
 python -m src.cli analyze "Slack" --source g2
 
+# Enable debug logging for troubleshooting
+python -m src.cli analyze "Notion" --verbose
+
 # Just scrape (no analysis)
 python -m src.cli scrape "Notion" --source reddit --source g2
 ```
@@ -65,6 +70,7 @@ Edit `config.yaml` to tune the pipeline:
 | `g2` | `request_delay`, `max_pages`, `user_agent_rotation` |
 | `clustering` | `embedding_model`, `umap_n_neighbors`, `hdbscan_min_cluster_size` |
 | `llm` | `model`, `temperature`, `max_tokens` |
+| `logging` | `level` (`INFO` or `DEBUG`), `format` |
 
 LLM endpoint and API keys are set via `.env`:
 
@@ -84,6 +90,8 @@ Any OpenAI-compatible API works — OpenAI, Anthropic (via proxy), Ollama, OpenC
 | **G2** | Web scraping (BeautifulSoup) | None — includes User-Agent rotation and polite request delays |
 
 > Twitter/X support planned. Modular scraper design makes adding new sources straightforward.
+>
+> **Privacy:** Usernames and PII are stripped at ingestion. Only the review text and a clickable source link are retained.
 
 ## Output
 
@@ -103,11 +111,11 @@ Each report includes:
 ```
 src/
 ├── scrapers/          # Reddit (PRAW) and G2 (BeautifulSoup) scrapers
-├── pipeline/          # Embeddings, clustering, LLM analysis, comparison
+├── pipeline/          # Embeddings, clustering, LLM analysis, comparison, rate limiting, deduplication
 ├── models/            # Data classes (FeedbackItem, ClusterResult, ProductReport)
 ├── config.py          # YAML + env var configuration loader
 └── cli.py             # Click CLI (analyze, scrape commands)
-tests/                 # 18 tests covering all modules
+tests/                 # 34 tests covering all modules
 ```
 
 ## Running Tests

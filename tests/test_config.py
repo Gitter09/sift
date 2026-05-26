@@ -1,22 +1,47 @@
 import os
+import logging
 import tempfile
-from src.config import load_settings, Settings, RedditConfig, G2Config, ClusteringConfig, LLMConfig
+from src.config import (
+    load_settings, setup_logging, Settings,
+    RedditConfig, G2Config, ClusteringConfig, LLMConfig, LoggingConfig,
+)
 
 
 def test_load_settings_defaults():
     settings = load_settings()
     assert isinstance(settings, Settings)
     assert settings.clustering.embedding_model == "all-MiniLM-L12-v2"
-    assert settings.g2.request_delay == 2.0
+    assert settings.g2.request_delay == 2.5
+    assert settings.g2.max_requests_per_minute == 12
+    assert settings.reddit.target_rate_per_minute == 50
+    assert settings.reddit.praw_ratelimit_seconds == 300
     assert settings.llm.base_url == "https://api.openai.com/v1"
+    assert settings.logging.level == "INFO"
+
+
+def test_logging_config_from_yaml():
+    yaml_content = """
+logging:
+  level: "DEBUG"
+  format: "custom format"
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(yaml_content)
+        f.flush()
+        settings = load_settings(f.name)
+        assert settings.logging.level == "DEBUG"
+        assert settings.logging.format == "custom format"
+        os.unlink(f.name)
 
 
 def test_load_settings_from_yaml():
     yaml_content = """
 reddit:
   max_posts: 10
+  target_rate_per_minute: 40
 g2:
   request_delay: 3.0
+  max_requests_per_minute: 8
 clustering:
   embedding_model: "all-MiniLM-L12-v2"
   hdbscan_min_cluster_size: 5
@@ -28,7 +53,9 @@ llm:
         f.flush()
         settings = load_settings(f.name)
         assert settings.reddit.max_posts == 10
+        assert settings.reddit.target_rate_per_minute == 40
         assert settings.g2.request_delay == 3.0
+        assert settings.g2.max_requests_per_minute == 8
         assert settings.clustering.hdbscan_min_cluster_size == 5
         assert settings.llm.model == "gpt-4o"
         os.unlink(f.name)
@@ -43,3 +70,13 @@ def test_env_override():
     # Clean up
     os.environ.pop("LLM_API_KEY", None)
     os.environ.pop("LLM_BASE_URL", None)
+
+
+def test_setup_logging():
+    settings = load_settings()
+    setup_logging(settings, verbose=False)
+    src_logger = logging.getLogger("src")
+    assert src_logger.level == logging.INFO
+
+    setup_logging(settings, verbose=True)
+    assert src_logger.level == logging.DEBUG
