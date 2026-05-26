@@ -13,10 +13,10 @@ logger = logging.getLogger(__name__)
 
 class RedditScraper(BaseScraper):
     # Reddit API rate limits (OAuth script apps):
-    #   - 60 requests per minute (10-minute rolling window, per OAuth client)
+    #   - 100 QPM / 1000 per 10 minutes (rolling window, per OAuth client)
     #   - PRAW auto-handles X-Ratelimit-* headers and sleeps appropriately
     #   - We set ratelimit_seconds=300 so PRAW auto-waits up to 5min on rate limit errors
-    #   - We target 50 req/min to leave headroom for PRAW's internal calls
+    #   - We target 50 req/min to leave generous headroom for PRAW's internal calls
     #   - X-Ratelimit-Used, X-Ratelimit-Remaining, X-Ratelimit-Reset headers in responses
 
     def __init__(self, config: RedditConfig):

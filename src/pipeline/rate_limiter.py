@@ -66,7 +66,7 @@ class PrawRateMonitor:
     """Monitor PRAW's rate limit headers from Reddit API responses."""
 
     def __init__(self, target_rate: int = 50):
-        self.target_rate = target_rate  # requests per minute (leave headroom below 60)
+        self.target_rate = target_rate  # requests per minute (leave headroom below 100 QPM)
         self._request_count = 0
         self._start_time: Optional[float] = None
 

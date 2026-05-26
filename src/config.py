@@ -17,8 +17,8 @@ class RedditConfig:
     search_sort: str = "relevance"
     max_posts: int = 30
     max_comments_per_post: int = 15
-    # Rate limiting: Reddit API allows 60 req/min for OAuth.
-    # We target 50 req/min to leave headroom for PRAW's internal calls.
+    # Rate limiting: Reddit API allows 100 QPM / 1000 per 10 min for OAuth.
+    # We target 50 req/min to leave generous headroom for PRAW's internal calls.
     target_rate_per_minute: int = 50
     # PRAW's ratelimit_seconds: how long PRAW will auto-wait on Reddit rate limit errors.
     # Default in PRAW is 5s; we raise to 300s for resilience on long scraping runs.
