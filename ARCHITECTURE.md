@@ -93,9 +93,9 @@ This document chronicles every significant architectural decision made during th
 **Context:** Reddit API allows 100 QPM / 1000 per 10 min for OAuth script apps. PRAW auto-handles rate limit headers but has a default `ratelimit_seconds=5` which aborts on longer waits.
 **Decision:** Three-part strategy:
 1. Set PRAW's `ratelimit_seconds=300` so it auto-waits up to 5 minutes on rate limit errors instead of crashing
-2. Target 50 req/min (leaving generous headroom for PRAW's internal calls)
+2. Target 80 req/min (leaving generous headroom for PRAW's internal calls)
 3. Add `PrawRateMonitor` that tracks request count and enforces pace — sleeps proportionally if rate exceeds target
-**Why:** PRAW's default 5s limit causes crashes on long scraping runs. Raising to 300s makes the scraper resilient. Targeting 50/min instead of 100/min accounts for PRAW's internal pagination requests that you don't explicitly see. The monitor logs rate info every 10 requests so you can see pacing in action.
+**Why:** PRAW's default 5s limit causes crashes on long scraping runs. Raising to 300s makes the scraper resilient. Targeting 80/min instead of 100/min accounts for PRAW's internal pagination requests that you don't explicitly see. The monitor logs rate info every 10 requests so you can see pacing in action.
 **LinkedIn Angle:** "How I made my Reddit scraper crash-proof — the 3-layer rate limiting strategy that PRAW doesn't tell you about."
 
 ---

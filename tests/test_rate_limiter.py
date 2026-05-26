@@ -43,14 +43,14 @@ def test_rate_limiter_wait_enforces_interval():
 
 
 def test_praw_rate_monitor_record():
-    monitor = PrawRateMonitor(target_rate=50)
+    monitor = PrawRateMonitor(target_rate=80)
     for i in range(5):
         monitor.record_request()
     assert monitor._request_count == 5
 
 
 def test_praw_rate_monitor_ensure_pace_triggers_sleep():
-    monitor = PrawRateMonitor(target_rate=50)
+    monitor = PrawRateMonitor(target_rate=80)
     monitor._request_count = 10
     monitor._start_time = 0.0
     with patch("src.pipeline.rate_limiter.time.time", return_value=1.0),          patch("src.pipeline.rate_limiter.time.sleep") as mock_sleep:
@@ -61,7 +61,7 @@ def test_praw_rate_monitor_ensure_pace_triggers_sleep():
 
 
 def test_praw_rate_monitor_no_sleep_when_within_target():
-    monitor = PrawRateMonitor(target_rate=50)
+    monitor = PrawRateMonitor(target_rate=80)
     monitor._request_count = 10
     monitor._start_time = 0.0
     with patch("src.pipeline.rate_limiter.time.time", return_value=12.0),          patch("src.pipeline.rate_limiter.time.sleep") as mock_sleep:

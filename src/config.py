@@ -18,8 +18,8 @@ class RedditConfig:
     max_posts: int = 30
     max_comments_per_post: int = 15
     # Rate limiting: Reddit API allows 100 QPM / 1000 per 10 min for OAuth.
-    # We target 50 req/min to leave generous headroom for PRAW's internal calls.
-    target_rate_per_minute: int = 50
+    # We target 80 req/min to leave generous headroom for PRAW's internal calls.
+    target_rate_per_minute: int = 80
     # PRAW's ratelimit_seconds: how long PRAW will auto-wait on Reddit rate limit errors.
     # Default in PRAW is 5s; we raise to 300s for resilience on long scraping runs.
     praw_ratelimit_seconds: int = 300
@@ -102,7 +102,7 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             search_sort=reddit_raw.get("search_sort", "relevance"),
             max_posts=reddit_raw.get("max_posts", 30),
             max_comments_per_post=reddit_raw.get("max_comments_per_post", 15),
-            target_rate_per_minute=reddit_raw.get("target_rate_per_minute", 50),
+            target_rate_per_minute=reddit_raw.get("target_rate_per_minute", 80),
             praw_ratelimit_seconds=reddit_raw.get("praw_ratelimit_seconds", 300),
             subreddit_delay=reddit_raw.get("subreddit_delay", 2.0),
         ),

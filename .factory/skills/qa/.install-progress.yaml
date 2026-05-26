@@ -1,0 +1,41 @@
+# QA Install Progress
+# Generated: 2026-05-25
+
+phase_2_complete: true
+phase_3_complete: true
+phase_4_complete: true
+
+# Category 1: Default QA Target
+qa_target: local
+
+# Category 2: Personas & Roles
+personas: none
+
+# Category 3: Critical Flows
+critical_flows:
+  - analyze
+  - scrape
+error_flows: all
+
+# Category 4: External Services
+integrations:
+  reddit:
+    creds_source: github_secrets
+    env_vars: [REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET]
+  llm:
+    creds_source: github_secrets
+    env_vars: [LLM_API_KEY, LLM_BASE_URL]
+
+# Category 5: Cleanup
+cleanup: manual
+cleanup_instructions: "Output files in output/ directory are left for manual review."
+
+# Category 6: ImageMagick
+imagemagick: false
+
+# Category 7: GitHub Action
+github_action: true
+qa_check_type: required
+
+# Category 8: Failure Learning
+failure_learning: suggest_in_report

@@ -1,0 +1,55 @@
+# QA Configuration for product-copilot (sift)
+# Single source of truth — all env, auth, and integration config lives here.
+
+project: product-copilot
+repo: Gitter09/sift
+imagemagick: false
+
+environments:
+  local:
+    url: localhost
+    restrictions: []
+
+default_target: local
+
+auth:
+  method: none
+  provider: none
+
+personas: []
+
+apps:
+  cli:
+    path_patterns:
+      - "src/**/*.py"
+      - "tests/**/*.py"
+      - "pyproject.toml"
+      - "config.yaml"
+    skill: qa-cli
+    test_tool: tuistory
+    build_command: "pip install -e '.[dev]'"
+
+feature_flags:
+  provider: none
+  dashboard_url: ""
+  how_to_override: ""
+
+integrations:
+  reddit:
+    provider: Reddit API (PRAW)
+    client_id_env: REDDIT_CLIENT_ID
+    client_secret_env: REDDIT_CLIENT_SECRET
+    sandbox_mode: false
+  llm:
+    provider: OpenAI-compatible API (api.freemodel.dev)
+    api_key_env: LLM_API_KEY
+    base_url_env: LLM_BASE_URL
+    model_env: LLM_MODEL
+    sandbox_mode: false
+
+cleanup:
+  auto_cleanup: false
+  strategy: manual
+  instructions: "Output files in output/ directory are left for manual review after each run."
+
+failure_learning: suggest_in_report

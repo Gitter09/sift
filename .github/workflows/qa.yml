@@ -1,0 +1,109 @@
+name: QA
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: qa-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  qa:
+    name: QA (CLI Tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install tuistory
+        run: npm install -g tuistory
+
+      - name: Install project dependencies
+        run: pip install -e '.[dev]'
+
+      - name: Install droid CLI
+        run: curl -fsSL https://app.factory.ai/cli | sh
+
+      - name: Run QA
+        id: qa
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          CI: "true"
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+        run: |
+          droid exec --auto high \
+            "You are running in a non-interactive CI environment. There is NO human available.
+            Do NOT use AskUser, do NOT wait for confirmations, do NOT pause for input.
+            Run the qa skill. Write the final report to qa-results/report.md"
+
+      - name: Upload QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-results
+          path: qa-results/
+          retention-days: 14
+
+      - name: Post QA report as PR comment
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -f qa-results/report.md ]; then
+            REPORT=$(cat qa-results/report.md)
+          elif [ -f qa-output.txt ]; then
+            REPORT="<details><summary>QA Output</summary>\n\n\`\`\`\n$(cat qa-output.txt)\n\`\`\`\n</details>"
+          else
+            REPORT="QA completed but no report was generated. Check the workflow artifacts."
+          fi
+
+          COMMENT_BODY="<!-- qa-report -->
+          ${REPORT}
+
+          ---
+          [View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) | [Download artifacts](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts)"
+
+          # Find existing QA comment and update it, or create new one
+          EXISTING=$(gh pr view ${{ github.event.pull_request.number }} --json comments -q ".comments[] | select(.body | startswith(\"<!-- qa-report -->\")) | .url" | head -1)
+
+          if [ -n "$EXISTING" ]; then
+            echo "$COMMENT_BODY" | gh pr comment $EXISTING --body-file - --edit-last
+          else
+            echo "$COMMENT_BODY" | gh pr comment ${{ github.event.pull_request.number }} --body-file -
+          fi
+
+      - name: Report QA status
+        if: always()
+        run: |
+          if [ "${{ steps.qa.outcome }}" = "success" ]; then
+            echo "QA completed successfully"
+          elif [ "${{ steps.qa.outcome }}" = "failure" ]; then
+            echo "QA found failures — check the PR comment for details"
+          else
+            echo "QA was cancelled or skipped"
+          fi

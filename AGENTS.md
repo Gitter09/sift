@@ -71,7 +71,7 @@ output/              # Generated reports (gitignored)
 
 ## Rate Limiting Reference
 
-- **Reddit:** 100 QPM / 1000 per 10 min (OAuth). Sift targets 50 req/min. PRAW `ratelimit_seconds=300`.
+- **Reddit:** 100 QPM / 1000 per 10 min (OAuth). Sift targets 80 req/min. PRAW `ratelimit_seconds=300`.
 - **G2:** No official API. Cloudflare + Akamai protection. Sift targets 12 req/min with exponential backoff + jitter.
 - Both use `src/pipeline/rate_limiter.py` — `RateLimiter` (token bucket) for HTTP scrapers, `PrawRateMonitor` for Reddit.
 

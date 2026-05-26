@@ -13,7 +13,7 @@ def test_load_settings_defaults():
     assert settings.clustering.embedding_model == "all-MiniLM-L12-v2"
     assert settings.g2.request_delay == 2.5
     assert settings.g2.max_requests_per_minute == 12
-    assert settings.reddit.target_rate_per_minute == 50
+    assert settings.reddit.target_rate_per_minute == 80
     assert settings.reddit.praw_ratelimit_seconds == 300
     assert settings.llm.base_url == "https://api.openai.com/v1"
     assert settings.logging.level == "INFO"
