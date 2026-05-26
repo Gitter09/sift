@@ -4,9 +4,30 @@ import sys
 import yaml
 from dotenv import load_dotenv
 from dataclasses import dataclass, field
-from typing import List
+from typing import Dict, List
 
 load_dotenv()
+
+
+DEFAULT_ACTIVE_SOURCES = [
+    "g2",
+    "app_store",
+    "play_store",
+    "youtube",
+    "hacker_news",
+    "github_issues",
+    "product_hunt",
+    "support_forums",
+    "changelogs",
+    "discord_exports",
+    "linkedin_comments",
+]
+
+
+@dataclass
+class SourcesConfig:
+    default_sources: List[str] = field(default_factory=lambda: DEFAULT_ACTIVE_SOURCES.copy())
+    disabled_sources: List[str] = field(default_factory=lambda: ["reddit"])
 
 
 @dataclass
@@ -44,6 +65,95 @@ class G2Config:
 
 
 @dataclass
+class AppStoreConfig:
+    app_ids: Dict[str, str] = field(default_factory=dict)
+    countries: List[str] = field(default_factory=lambda: ["us"])
+    max_pages: int = 1
+    max_items: int = 50
+    request_delay: float = 1.0
+    max_requests_per_minute: int = 30
+
+
+@dataclass
+class PlayStoreConfig:
+    package_names: Dict[str, str] = field(default_factory=dict)
+    countries: List[str] = field(default_factory=lambda: ["us"])
+    languages: List[str] = field(default_factory=lambda: ["en"])
+    max_items: int = 50
+    request_delay: float = 1.0
+    max_requests_per_minute: int = 20
+
+
+@dataclass
+class YouTubeConfig:
+    api_key: str = ""
+    video_ids: Dict[str, List[str]] = field(default_factory=dict)
+    max_videos: int = 5
+    max_comments_per_video: int = 50
+    order: str = "relevance"
+
+
+@dataclass
+class HackerNewsConfig:
+    max_items: int = 50
+    tags: str = "comment,story"
+    request_delay: float = 1.0
+    max_requests_per_minute: int = 30
+
+
+@dataclass
+class GitHubIssuesConfig:
+    token: str = ""
+    repos: Dict[str, List[str]] = field(default_factory=dict)
+    max_items: int = 50
+    request_delay: float = 1.0
+    max_requests_per_minute: int = 30
+
+
+@dataclass
+class ProductHuntConfig:
+    slugs: Dict[str, str] = field(default_factory=dict)
+    max_items: int = 50
+    request_delay: float = 2.0
+    max_requests_per_minute: int = 20
+
+
+@dataclass
+class SupportForumsConfig:
+    search_urls: List[str] = field(default_factory=list)
+    max_items: int = 50
+    request_delay: float = 1.0
+    max_requests_per_minute: int = 20
+
+
+@dataclass
+class ChangelogsConfig:
+    urls: Dict[str, List[str]] = field(default_factory=dict)
+    search_urls: List[str] = field(default_factory=list)
+    max_items: int = 50
+    request_delay: float = 1.0
+    max_requests_per_minute: int = 20
+
+
+@dataclass
+class DiscordExportsConfig:
+    paths: List[str] = field(default_factory=list)
+    urls: List[str] = field(default_factory=list)
+    max_items: int = 100
+    request_delay: float = 1.0
+    max_requests_per_minute: int = 20
+
+
+@dataclass
+class LinkedInCommentsConfig:
+    paths: List[str] = field(default_factory=list)
+    urls: List[str] = field(default_factory=list)
+    max_items: int = 100
+    request_delay: float = 1.0
+    max_requests_per_minute: int = 20
+
+
+@dataclass
 class ClusteringConfig:
     embedding_model: str = "all-MiniLM-L12-v2"
     umap_n_neighbors: int = 15
@@ -69,8 +179,19 @@ class LoggingConfig:
 
 @dataclass
 class Settings:
+    sources: SourcesConfig = field(default_factory=SourcesConfig)
     reddit: RedditConfig = field(default_factory=RedditConfig)
     g2: G2Config = field(default_factory=G2Config)
+    app_store: AppStoreConfig = field(default_factory=AppStoreConfig)
+    play_store: PlayStoreConfig = field(default_factory=PlayStoreConfig)
+    youtube: YouTubeConfig = field(default_factory=YouTubeConfig)
+    hacker_news: HackerNewsConfig = field(default_factory=HackerNewsConfig)
+    github_issues: GitHubIssuesConfig = field(default_factory=GitHubIssuesConfig)
+    product_hunt: ProductHuntConfig = field(default_factory=ProductHuntConfig)
+    support_forums: SupportForumsConfig = field(default_factory=SupportForumsConfig)
+    changelogs: ChangelogsConfig = field(default_factory=ChangelogsConfig)
+    discord_exports: DiscordExportsConfig = field(default_factory=DiscordExportsConfig)
+    linkedin_comments: LinkedInCommentsConfig = field(default_factory=LinkedInCommentsConfig)
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -83,8 +204,19 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
         with open(config_path, "r") as f:
             yaml_data = yaml.safe_load(f) or {}
 
+    sources_raw = yaml_data.get("sources", {})
     reddit_raw = yaml_data.get("reddit", {})
     g2_raw = yaml_data.get("g2", {})
+    app_store_raw = yaml_data.get("app_store", {})
+    play_store_raw = yaml_data.get("play_store", {})
+    youtube_raw = yaml_data.get("youtube", {})
+    hacker_news_raw = yaml_data.get("hacker_news", {})
+    github_issues_raw = yaml_data.get("github_issues", {})
+    product_hunt_raw = yaml_data.get("product_hunt", {})
+    support_forums_raw = yaml_data.get("support_forums", {})
+    changelogs_raw = yaml_data.get("changelogs", {})
+    discord_exports_raw = yaml_data.get("discord_exports", {})
+    linkedin_comments_raw = yaml_data.get("linkedin_comments", {})
     clustering_raw = yaml_data.get("clustering", {})
     llm_raw = yaml_data.get("llm", {})
     logging_raw = yaml_data.get("logging", {})
@@ -95,6 +227,10 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
         g2_jitter = tuple(g2_jitter)
 
     settings = Settings(
+        sources=SourcesConfig(
+            default_sources=sources_raw.get("default_sources", DEFAULT_ACTIVE_SOURCES.copy()),
+            disabled_sources=sources_raw.get("disabled_sources", ["reddit"]),
+        ),
         reddit=RedditConfig(
             client_id=os.getenv("REDDIT_CLIENT_ID", reddit_raw.get("client_id", "")),
             client_secret=os.getenv("REDDIT_CLIENT_SECRET", reddit_raw.get("client_secret", "")),
@@ -115,6 +251,75 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             max_backoff=g2_raw.get("max_backoff", 60.0),
             max_retries=g2_raw.get("max_retries", 3),
             jitter_range=g2_jitter,
+        ),
+        app_store=AppStoreConfig(
+            app_ids=app_store_raw.get("app_ids", {}),
+            countries=app_store_raw.get("countries", ["us"]),
+            max_pages=app_store_raw.get("max_pages", 1),
+            max_items=app_store_raw.get("max_items", 50),
+            request_delay=app_store_raw.get("request_delay", 1.0),
+            max_requests_per_minute=app_store_raw.get("max_requests_per_minute", 30),
+        ),
+        play_store=PlayStoreConfig(
+            package_names=play_store_raw.get("package_names", {}),
+            countries=play_store_raw.get("countries", ["us"]),
+            languages=play_store_raw.get("languages", ["en"]),
+            max_items=play_store_raw.get("max_items", 50),
+            request_delay=play_store_raw.get("request_delay", 1.0),
+            max_requests_per_minute=play_store_raw.get("max_requests_per_minute", 20),
+        ),
+        youtube=YouTubeConfig(
+            api_key=os.getenv("YOUTUBE_API_KEY", youtube_raw.get("api_key", "")),
+            video_ids=youtube_raw.get("video_ids", {}),
+            max_videos=youtube_raw.get("max_videos", 5),
+            max_comments_per_video=youtube_raw.get("max_comments_per_video", 50),
+            order=youtube_raw.get("order", "relevance"),
+        ),
+        hacker_news=HackerNewsConfig(
+            max_items=hacker_news_raw.get("max_items", 50),
+            tags=hacker_news_raw.get("tags", "comment,story"),
+            request_delay=hacker_news_raw.get("request_delay", 1.0),
+            max_requests_per_minute=hacker_news_raw.get("max_requests_per_minute", 30),
+        ),
+        github_issues=GitHubIssuesConfig(
+            token=os.getenv("GITHUB_TOKEN", github_issues_raw.get("token", "")),
+            repos=github_issues_raw.get("repos", {}),
+            max_items=github_issues_raw.get("max_items", 50),
+            request_delay=github_issues_raw.get("request_delay", 1.0),
+            max_requests_per_minute=github_issues_raw.get("max_requests_per_minute", 30),
+        ),
+        product_hunt=ProductHuntConfig(
+            slugs=product_hunt_raw.get("slugs", {}),
+            max_items=product_hunt_raw.get("max_items", 50),
+            request_delay=product_hunt_raw.get("request_delay", 2.0),
+            max_requests_per_minute=product_hunt_raw.get("max_requests_per_minute", 20),
+        ),
+        support_forums=SupportForumsConfig(
+            search_urls=support_forums_raw.get("search_urls", []),
+            max_items=support_forums_raw.get("max_items", 50),
+            request_delay=support_forums_raw.get("request_delay", 1.0),
+            max_requests_per_minute=support_forums_raw.get("max_requests_per_minute", 20),
+        ),
+        changelogs=ChangelogsConfig(
+            urls=changelogs_raw.get("urls", {}),
+            search_urls=changelogs_raw.get("search_urls", []),
+            max_items=changelogs_raw.get("max_items", 50),
+            request_delay=changelogs_raw.get("request_delay", 1.0),
+            max_requests_per_minute=changelogs_raw.get("max_requests_per_minute", 20),
+        ),
+        discord_exports=DiscordExportsConfig(
+            paths=discord_exports_raw.get("paths", []),
+            urls=discord_exports_raw.get("urls", []),
+            max_items=discord_exports_raw.get("max_items", 100),
+            request_delay=discord_exports_raw.get("request_delay", 1.0),
+            max_requests_per_minute=discord_exports_raw.get("max_requests_per_minute", 20),
+        ),
+        linkedin_comments=LinkedInCommentsConfig(
+            paths=linkedin_comments_raw.get("paths", []),
+            urls=linkedin_comments_raw.get("urls", []),
+            max_items=linkedin_comments_raw.get("max_items", 100),
+            request_delay=linkedin_comments_raw.get("request_delay", 1.0),
+            max_requests_per_minute=linkedin_comments_raw.get("max_requests_per_minute", 20),
         ),
         clustering=ClusteringConfig(
             embedding_model=clustering_raw.get("embedding_model", "all-MiniLM-L12-v2"),

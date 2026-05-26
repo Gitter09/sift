@@ -5,7 +5,7 @@ import os
 import click
 
 from src.config import load_settings, setup_logging
-from src.scrapers.factory import get_scraper
+from src.scrapers.factory import AVAILABLE_SOURCES, default_sources, get_scraper
 from src.pipeline.dedup import DedupFilter
 from src.pipeline.embedder import Embedder
 from src.pipeline.clusterer import Clusterer
@@ -16,6 +16,8 @@ from src.models.feedback import FeedbackItem
 from src.models.report import ProductReport
 
 logger = logging.getLogger(__name__)
+
+SOURCE_HELP = "Data source to use. Default: configured active sources."
 
 # Shared verbose option decorator
 _verbose_option = click.option(
@@ -35,7 +37,7 @@ def main(ctx, verbose):
 
 @main.command()
 @click.argument("products", nargs=-1, required=True)
-@click.option("--source", "-s", multiple=True, help="Data source to use (reddit, g2). Default: all available.")
+@click.option("--source", "-s", multiple=True, help=SOURCE_HELP)
 @click.option("--config", "-c", default="config.yaml", help="Path to config file.")
 @click.option("--output", "-o", default="output", help="Output directory for reports.")
 @_verbose_option
@@ -44,7 +46,7 @@ def analyze(ctx, products, source, config, output, verbose):
     """Analyze feedback for one or more products."""
     settings = load_settings(config)
     setup_logging(settings, verbose=verbose)
-    sources = list(source) if source else ["reddit", "g2"]
+    sources = _resolve_sources(source, settings)
 
     dedup = DedupFilter()
     all_feedback: dict[str, list[FeedbackItem]] = {}
@@ -65,7 +67,7 @@ def analyze(ctx, products, source, config, output, verbose):
                         f"Check logs for details.", err=True,
                     )
             else:
-                click.echo(f"No scraper available for '{src}'", err=True)
+                click.echo(f"No enabled scraper available for '{src}'", err=True)
 
         # Deduplicate and cap
         feedback = dedup.filter(feedback)
@@ -73,7 +75,7 @@ def analyze(ctx, products, source, config, output, verbose):
             feedback = feedback[:settings.max_feedback_per_source]
 
         all_feedback[product] = feedback
-        click.echo(f"Collected {len(feedback)} unique {', '.join(sources)} items for '{product}'.")
+        click.echo(f"Collected {len(feedback)} unique items for '{product}'.")
 
     embedder = Embedder(settings.clustering)
     clusterer = Clusterer(settings.clustering)
@@ -108,6 +110,10 @@ def analyze(ctx, products, source, config, output, verbose):
         )
         product_reports[product] = report
 
+    if not product_reports:
+        click.echo("No reports generated because no product had enough feedback for analysis.", err=True)
+        return
+
     if len(product_reports) >= 2:
         click.echo("Generating multi-product comparison...")
         comparison = comparator.compare(product_reports)
@@ -128,7 +134,7 @@ def analyze(ctx, products, source, config, output, verbose):
 
 @main.command("scrape")
 @click.argument("product")
-@click.option("--source", "-s", multiple=True, help="Data source (reddit, g2).")
+@click.option("--source", "-s", multiple=True, help=SOURCE_HELP)
 @click.option("--config", "-c", default="config.yaml", help="Path to config file.")
 @click.option("--output", "-o", default="output", help="Output directory.")
 @_verbose_option
@@ -137,7 +143,7 @@ def scrape_cmd(ctx, product, source, config, output, verbose):
     """Scrape feedback for a product (no analysis)."""
     settings = load_settings(config)
     setup_logging(settings, verbose=verbose)
-    sources = list(source) if source else ["reddit", "g2"]
+    sources = _resolve_sources(source, settings)
 
     dedup = DedupFilter()
     feedback: list[FeedbackItem] = []
@@ -154,6 +160,8 @@ def scrape_cmd(ctx, product, source, config, output, verbose):
                     f"[WARNING] {src} scraper encountered an error for '{product}'. "
                     f"Check logs for details.", err=True,
                 )
+        else:
+            click.echo(f"No enabled scraper available for '{src}'", err=True)
 
     feedback = dedup.filter(feedback)
 
@@ -163,6 +171,14 @@ def scrape_cmd(ctx, product, source, config, output, verbose):
     with open(path, "w") as f:
         json.dump([item.to_dict() for item in feedback], f, indent=2)
     click.echo(f"Saved {len(feedback)} unique items to {path}")
+
+
+def _resolve_sources(source: tuple[str, ...], settings) -> list[str]:
+    requested = list(source) if source else default_sources(settings)
+    unknown = [src for src in requested if src not in AVAILABLE_SOURCES]
+    if unknown:
+        click.echo(f"Unknown source(s): {', '.join(unknown)}", err=True)
+    return [src for src in requested if src in AVAILABLE_SOURCES]
 
 
 if __name__ == "__main__":

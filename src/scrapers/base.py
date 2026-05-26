@@ -12,5 +12,5 @@ class BaseScraper(ABC):
     @property
     @abstractmethod
     def source_name(self) -> str:
-        """Return the name of this data source (e.g. 'reddit', 'g2')."""
+        """Return the stable config key for this data source."""
         pass

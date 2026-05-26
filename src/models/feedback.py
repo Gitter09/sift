@@ -6,7 +6,7 @@ from datetime import datetime
 
 @dataclass
 class FeedbackItem:
-    source: str          # "reddit" or "g2"
+    source: str          # source key such as "g2", "hacker_news", or "github_issues"
     product: str         # product name being analyzed
     text: str            # the actual feedback/complaint text
     rating: Optional[float] = None   # numeric rating if available (e.g. G2 stars)

@@ -147,3 +147,13 @@ This document chronicles every significant architectural decision made during th
 **Why:** PII-free ingestion is a privacy best-practice and simplifies GDPR compliance. Hash-based IDs prevent duplicates across scrapers (e.g., if Reddit and G2 scrape the same content). Structured logging with levels means production runs stay quiet while `--verbose` enables on-demand debugging — critical for long-running scrape jobs.
 
 **LinkedIn Angle:** "How I made my web scraper PII-free, deduplication-safe, and debuggable in 3 decisions — and why print() is the worst logging library."
+
+---
+
+## Decision 014: Config-Gated Source Portfolio While Reddit Approval Is Pending
+
+**Date:** 2026-05-26
+**Context:** Reddit API access requires manual approval, so the default pipeline needed to stop depending on Reddit while still preserving the scraper for reactivation later.
+**Decision:** Added a `sources` config section with `default_sources` and `disabled_sources`, put `reddit` in `disabled_sources`, and expanded the source registry to include G2, App Store, Play Store, YouTube comments, Hacker News, GitHub issues, Product Hunt comments, public support forums, changelogs, public Discord exports, and LinkedIn comment exports. Sources that require product-specific IDs, repos, video IDs, forum URLs, or exported JSON now skip cleanly until configured.
+**Why:** Muting Reddit through configuration keeps the existing PRAW implementation intact and makes reactivation a one-line config change. A broader source portfolio keeps Sift useful during approval wait time, while explicit per-source config avoids brittle scraping guesses or unauthorized collection from channels that need exports or API keys.
+**LinkedIn Angle:** "What I did when an API approval blocked my roadmap: feature-flag the dependency, keep the interface stable, and widen the data portfolio instead of waiting."

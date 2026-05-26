@@ -1,10 +1,10 @@
 # Sift
 
-> Scrape user feedback from Reddit and G2, cluster complaints with ML, and generate AI-powered product insights — all from your terminal.
+> Scrape user feedback from public product channels, cluster complaints with ML, and generate AI-powered product insights — all from your terminal.
 
 ## What It Does
 
-- **Scrapes** Reddit and G2 for real user feedback about any product
+- **Scrapes** G2, app stores, YouTube, Hacker News, GitHub issues, Product Hunt, forums, changelogs, and public exports for real user feedback about any product
 - **Anonymizes** reviews at ingestion — no usernames stored, only a clickable link to the source
 - **Deduplicates** feedback across sources using hash-based IDs so you never count the same review twice
 - **Clusters** complaints and pain points using sentence embeddings + UMAP + HDBSCAN
@@ -14,9 +14,10 @@
 ## How It Works
 
 ```
-Reddit (PRAW API) ──┐
-                     ├──> Feedback Items ──> Dedup Filter ──> Sentence Embeddings ──> UMAP + HDBSCAN
-G2 (Web Scraping) ──┘        (anonymized)                                              (all-MiniLM-L12-v2)
+G2 / App Stores / YouTube / HN / GitHub / Forums / Exports
+          │
+          └──> Feedback Items ──> Dedup Filter ──> Sentence Embeddings ──> UMAP + HDBSCAN
+                       (anonymized)                                      (all-MiniLM-L12-v2)
 
                                           ┌── Clustered Themes ──> LLM Analysis ──> Report (MD + JSON)
               Multi-Product Comparison <──┘
@@ -24,7 +25,7 @@ G2 (Web Scraping) ──┘        (anonymized)                                 
 
 ## Quick Start
 
-**Prerequisites:** Python 3.11+, Reddit API credentials, an OpenAI-compatible LLM endpoint.
+**Prerequisites:** Python 3.11+ and an OpenAI-compatible LLM endpoint.
 
 ```bash
 # 1. Clone and install
@@ -34,7 +35,7 @@ pip install -e ".[dev]"
 
 # 2. Configure
 cp .env.example .env
-# Edit .env with your Reddit client ID/secret and LLM API key
+# Edit .env with your LLM API key and optional source API keys
 
 # 3. Run!
 python -m src.cli analyze "Notion" "Obsidian"
@@ -50,14 +51,14 @@ python -m src.cli analyze "Linear"
 python -m src.cli analyze "Figma" "Sketch" "Penpot"
 
 # Use only specific data sources
-python -m src.cli analyze "Notion" --source reddit
 python -m src.cli analyze "Slack" --source g2
+python -m src.cli analyze "VS Code" --source github_issues --source hacker_news
 
 # Enable debug logging for troubleshooting
 python -m src.cli analyze "Notion" --verbose
 
 # Just scrape (no analysis)
-python -m src.cli scrape "Notion" --source reddit --source g2
+python -m src.cli scrape "Notion" --source g2 --source app_store
 ```
 
 ## Configuration
@@ -66,8 +67,14 @@ Edit `config.yaml` to tune the pipeline:
 
 | Section | Key Options |
 |---------|-------------|
+| `sources` | `default_sources`, `disabled_sources` |
 | `reddit` | `subreddits`, `max_posts`, `max_comments_per_post` |
 | `g2` | `request_delay`, `max_pages`, `user_agent_rotation` |
+| `app_store` / `play_store` | product-to-app/package mappings, locale, item limits |
+| `youtube` | `video_ids`, `max_comments_per_video` |
+| `github_issues` | product-to-repo mappings, item limits |
+| `support_forums` / `changelogs` | URL templates or product URL mappings |
+| `discord_exports` / `linkedin_comments` | public/export JSON paths or URLs |
 | `clustering` | `embedding_model`, `umap_n_neighbors`, `hdbscan_min_cluster_size` |
 | `llm` | `model`, `temperature`, `max_tokens` |
 | `logging` | `level` (`INFO` or `DEBUG`), `format` |
@@ -78,6 +85,8 @@ LLM endpoint and API keys are set via `.env`:
 LLM_API_KEY=your-key
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_MODEL=gpt-4o-mini
+YOUTUBE_API_KEY=optional-youtube-key
+GITHUB_TOKEN=optional-github-token
 ```
 
 Any OpenAI-compatible API works — OpenAI, Anthropic (via proxy), Ollama, OpenCode, etc.
@@ -86,10 +95,20 @@ Any OpenAI-compatible API works — OpenAI, Anthropic (via proxy), Ollama, OpenC
 
 | Source | Method | Requirements |
 |--------|--------|-------------|
-| **Reddit** | PRAW (official API) | Free Reddit API credentials ([create here](https://www.reddit.com/prefs/apps)) |
 | **G2** | Web scraping (BeautifulSoup) | None — includes User-Agent rotation and polite request delays |
+| **App Store** | Apple customer reviews RSS | Product app IDs in `config.yaml` |
+| **Play Store** | Public app details/reviews page | Product package names in `config.yaml` |
+| **YouTube comments** | YouTube Data API | `YOUTUBE_API_KEY` and product video IDs |
+| **Hacker News** | Algolia HN Search API | None |
+| **GitHub issues** | GitHub Search API | Product repos; optional `GITHUB_TOKEN` |
+| **Product Hunt comments** | Public product pages | Optional product slugs |
+| **Support forums** | Configured public search URLs | Forum URL templates |
+| **Changelogs** | Configured public changelog URLs | Product URL mappings |
+| **Discord exports** | Public/exported JSON | JSON file paths or URLs |
+| **LinkedIn comments** | Public/exported JSON | JSON file paths or URLs |
+| **Reddit** | PRAW (official API) | Currently disabled in `sources.disabled_sources` until API approval |
 
-> Twitter/X support planned. Modular scraper design makes adding new sources straightforward.
+> To reactivate Reddit later, remove `reddit` from `sources.disabled_sources` and add it to `sources.default_sources` if you want it in default runs.
 >
 > **Privacy:** Usernames and PII are stripped at ingestion. Only the review text and a clickable source link are retained.
 
@@ -110,7 +129,7 @@ Each report includes:
 
 ```
 src/
-├── scrapers/          # Reddit (PRAW) and G2 (BeautifulSoup) scrapers
+├── scrapers/          # Source adapters for public feedback channels
 ├── pipeline/          # Embeddings, clustering, LLM analysis, comparison, rate limiting, deduplication
 ├── models/            # Data classes (FeedbackItem, ClusterResult, ProductReport)
 ├── config.py          # YAML + env var configuration loader
@@ -126,10 +145,10 @@ python -m pytest tests/ -v
 
 ## Roadmap
 
-- [ ] Twitter/X data source
+- [ ] Reactivate Reddit source after API approval
 - [ ] Web app with dashboard UI
 - [ ] Continuous monitoring mode (track sentiment over time)
-- [ ] Additional review sites (Trustpilot, Product Hunt, Capterra)
+- [ ] Additional review sites (Trustpilot, Capterra)
 - [ ] Slack/email alerting for new complaint spikes
 
 ## License

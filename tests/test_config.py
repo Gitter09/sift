@@ -17,6 +17,9 @@ def test_load_settings_defaults():
     assert settings.reddit.praw_ratelimit_seconds == 300
     assert settings.llm.base_url == "https://api.openai.com/v1"
     assert settings.logging.level == "INFO"
+    assert "reddit" in settings.sources.disabled_sources
+    assert "g2" in settings.sources.default_sources
+    assert "hacker_news" in settings.sources.default_sources
 
 
 def test_logging_config_from_yaml():
@@ -36,6 +39,12 @@ logging:
 
 def test_load_settings_from_yaml():
     yaml_content = """
+sources:
+  default_sources:
+    - g2
+    - hacker_news
+  disabled_sources:
+    - reddit
 reddit:
   max_posts: 10
   target_rate_per_minute: 40
@@ -54,6 +63,8 @@ llm:
         settings = load_settings(f.name)
         assert settings.reddit.max_posts == 10
         assert settings.reddit.target_rate_per_minute == 40
+        assert settings.sources.default_sources == ["g2", "hacker_news"]
+        assert settings.sources.disabled_sources == ["reddit"]
         assert settings.g2.request_delay == 3.0
         assert settings.g2.max_requests_per_minute == 8
         assert settings.clustering.hdbscan_min_cluster_size == 5
