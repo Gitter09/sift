@@ -17,6 +17,8 @@ DEFAULT_ACTIVE_SOURCES = [
     "hacker_news",
     "github_issues",
     "product_hunt",
+    "stack_overflow",
+    "dev_to",
     "support_forums",
     "changelogs",
     "discord_exports",
@@ -64,6 +66,8 @@ class G2Config:
     jitter_range: tuple = (0.5, 1.5)
     # Fall back to Playwright (real Chromium) when curl_cffi gets 403
     use_playwright_fallback: bool = True
+    # Optional paid proxy URL (e.g. ScraperAPI, ZenRows) — required for reliable G2 access
+    proxy_url: str = ""
 
 
 @dataclass
@@ -101,6 +105,7 @@ class HackerNewsConfig:
     tags: str = "comment,story"
     request_delay: float = 1.0
     max_requests_per_minute: int = 30
+    recency_days: int = 180
 
 
 @dataclass
@@ -120,6 +125,8 @@ class ProductHuntConfig:
     max_requests_per_minute: int = 20
     # Fall back to Playwright (real Chromium) when curl_cffi gets 403
     use_playwright_fallback: bool = True
+    # Optional: get a free token at producthunt.com/v2/oauth/applications
+    developer_token: str = ""
 
 
 @dataclass
@@ -134,6 +141,23 @@ class SupportForumsConfig:
 class ChangelogsConfig:
     urls: Dict[str, List[str]] = field(default_factory=dict)
     search_urls: List[str] = field(default_factory=list)
+    max_items: int = 50
+    request_delay: float = 1.0
+    max_requests_per_minute: int = 20
+
+
+@dataclass
+class StackOverflowConfig:
+    # Optional: register a free app at stackapps.com for 10k req/day (vs 300 without)
+    api_key: str = ""
+    sites: List[str] = field(default_factory=lambda: ["stackoverflow"])
+    max_items: int = 50
+    request_delay: float = 1.0
+    max_requests_per_minute: int = 20
+
+
+@dataclass
+class DevToConfig:
     max_items: int = 50
     request_delay: float = 1.0
     max_requests_per_minute: int = 20
@@ -194,6 +218,8 @@ class Settings:
     product_hunt: ProductHuntConfig = field(default_factory=ProductHuntConfig)
     support_forums: SupportForumsConfig = field(default_factory=SupportForumsConfig)
     changelogs: ChangelogsConfig = field(default_factory=ChangelogsConfig)
+    stack_overflow: StackOverflowConfig = field(default_factory=StackOverflowConfig)
+    dev_to: DevToConfig = field(default_factory=DevToConfig)
     discord_exports: DiscordExportsConfig = field(default_factory=DiscordExportsConfig)
     linkedin_comments: LinkedInCommentsConfig = field(default_factory=LinkedInCommentsConfig)
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
@@ -219,6 +245,8 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
     product_hunt_raw = yaml_data.get("product_hunt", {})
     support_forums_raw = yaml_data.get("support_forums", {})
     changelogs_raw = yaml_data.get("changelogs", {})
+    stack_overflow_raw = yaml_data.get("stack_overflow", {})
+    dev_to_raw = yaml_data.get("dev_to", {})
     discord_exports_raw = yaml_data.get("discord_exports", {})
     linkedin_comments_raw = yaml_data.get("linkedin_comments", {})
     clustering_raw = yaml_data.get("clustering", {})
@@ -256,6 +284,7 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             max_retries=g2_raw.get("max_retries", 3),
             jitter_range=g2_jitter,
             use_playwright_fallback=g2_raw.get("use_playwright_fallback", True),
+            proxy_url=os.getenv("G2_PROXY_URL", g2_raw.get("proxy_url", "")),
         ),
         app_store=AppStoreConfig(
             app_ids=app_store_raw.get("app_ids", {}),
@@ -285,6 +314,7 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             tags=hacker_news_raw.get("tags", "comment,story"),
             request_delay=hacker_news_raw.get("request_delay", 1.0),
             max_requests_per_minute=hacker_news_raw.get("max_requests_per_minute", 30),
+            recency_days=hacker_news_raw.get("recency_days", 180),
         ),
         github_issues=GitHubIssuesConfig(
             token=os.getenv("GITHUB_TOKEN", github_issues_raw.get("token", "")),
@@ -299,6 +329,7 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             request_delay=product_hunt_raw.get("request_delay", 2.0),
             max_requests_per_minute=product_hunt_raw.get("max_requests_per_minute", 20),
             use_playwright_fallback=product_hunt_raw.get("use_playwright_fallback", True),
+            developer_token=os.getenv("PRODUCT_HUNT_TOKEN", product_hunt_raw.get("developer_token", "")),
         ),
         support_forums=SupportForumsConfig(
             search_urls=support_forums_raw.get("search_urls", []),
@@ -312,6 +343,18 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             max_items=changelogs_raw.get("max_items", 50),
             request_delay=changelogs_raw.get("request_delay", 1.0),
             max_requests_per_minute=changelogs_raw.get("max_requests_per_minute", 20),
+        ),
+        stack_overflow=StackOverflowConfig(
+            api_key=os.getenv("STACK_OVERFLOW_KEY", stack_overflow_raw.get("api_key", "")),
+            sites=stack_overflow_raw.get("sites", ["stackoverflow"]),
+            max_items=stack_overflow_raw.get("max_items", 50),
+            request_delay=stack_overflow_raw.get("request_delay", 1.0),
+            max_requests_per_minute=stack_overflow_raw.get("max_requests_per_minute", 20),
+        ),
+        dev_to=DevToConfig(
+            max_items=dev_to_raw.get("max_items", 50),
+            request_delay=dev_to_raw.get("request_delay", 1.0),
+            max_requests_per_minute=dev_to_raw.get("max_requests_per_minute", 20),
         ),
         discord_exports=DiscordExportsConfig(
             paths=discord_exports_raw.get("paths", []),

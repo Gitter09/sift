@@ -17,7 +17,12 @@ def parse_json_object(raw: str, logger: logging.Logger, context: str) -> dict[st
     try:
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
-        parsed = json.loads(_extract_first_object(cleaned))
+        try:
+            parsed = json.loads(_extract_first_object(cleaned))
+        except json.JSONDecodeError:
+            # Last resort: try to close a truncated JSON object (common with
+            # token-limited responses from deepseek / OpenCode-style APIs).
+            parsed = json.loads(_close_truncated(cleaned))
 
     if not isinstance(parsed, dict):
         raise ValueError(f"Expected JSON object for {context}, got {type(parsed).__name__}")
@@ -66,6 +71,50 @@ def _extract_first_object(text: str) -> str:
                 return text[start:index + 1]
 
     raise json.JSONDecodeError("Unclosed JSON object", text, start)
+
+
+def _close_truncated(text: str) -> str:
+    """Append missing closing characters to a JSON object truncated mid-stream.
+
+    Handles the common deepseek/OpenCode case where the model's output is cut
+    off inside a string value, leaving the object unclosed.
+    """
+    start = text.find("{")
+    if start == -1:
+        raise json.JSONDecodeError("No JSON object found", text, 0)
+
+    body = text[start:]
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for char in body:
+        if escaped:
+            escaped = False
+            continue
+        if in_string:
+            if char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+
+    suffix = ""
+    if in_string:
+        suffix += '"'
+    if depth > 0:
+        suffix += "}" * depth
+
+    if not suffix:
+        raise json.JSONDecodeError("Unclosed JSON object", body, 0)
+
+    return body + suffix
 
 
 def log_parse_debug(

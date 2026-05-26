@@ -13,6 +13,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
+    MofNCompleteColumn,
     Progress,
     SpinnerColumn,
     TaskID,
@@ -139,10 +140,10 @@ class ScrapeProgress:
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
+            MofNCompleteColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeElapsedColumn(),
             console=console,
-            transient=True,
         )
         self._task_id: TaskID | None = None
 
@@ -178,10 +179,10 @@ class PipelineProgress:
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
+            MofNCompleteColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeElapsedColumn(),
             console=console,
-            transient=True,
         )
         self._task_id: TaskID | None = None
 
@@ -202,6 +203,10 @@ class PipelineProgress:
                 self._task_id,
                 description=f"[yellow]{name}[/yellow]",
             )
+
+    def set_total(self, total: int) -> None:
+        if self._task_id is not None:
+            self._progress.update(self._task_id, total=total)
 
     def advance(self) -> None:
         if self._task_id is not None:
@@ -366,6 +371,25 @@ def print_dedup_summary(total: int, duplicates: int, kept: int) -> None:
 def print_no_reports() -> None:
     console.print(
         "[yellow]No reports generated — no product had enough feedback for analysis.[/yellow]"
+    )
+
+
+def print_g2_proxy_warning() -> None:
+    console.print(
+        Panel(
+            "G2 is protected by Cloudflare and cannot be reliably scraped without a paid proxy.\n\n"
+            "To enable G2, add a proxy URL to your config or [bold].env[/bold]:\n\n"
+            "  [dim]# config.yaml[/dim]\n"
+            "  [bold]g2:[/bold]\n"
+            "  [bold]  proxy_url:[/bold] https://user:pass@proxy.example.com\n\n"
+            "  [dim]# .env[/dim]\n"
+            "  [bold]G2_PROXY_URL[/bold]=https://user:pass@proxy.example.com\n\n"
+            "Compatible services: [bold]ScraperAPI[/bold] · [bold]ZenRows[/bold] · "
+            "[bold]BrightData[/bold] · [bold]Oxylabs[/bold]\n\n"
+            "[dim]G2 will still be attempted but will likely return 0 results without a proxy.[/dim]",
+            title="[yellow]G2 Requires a Paid Proxy[/yellow]",
+            border_style="yellow",
+        )
     )
 
 

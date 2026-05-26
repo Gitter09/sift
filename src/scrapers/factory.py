@@ -7,18 +7,21 @@ from src.config import Settings
 from src.scrapers.simple_sources import (
     AppStoreScraper,
     ChangelogScraper,
+    DevToScraper,
     DiscordExportsScraper,
     GitHubIssuesScraper,
     HackerNewsScraper,
     LinkedInCommentsScraper,
     PlayStoreScraper,
     ProductHuntScraper,
+    StackOverflowScraper,
     SupportForumsScraper,
     YouTubeScraper,
 )
 
 logger = logging.getLogger(__name__)
 
+_g2_proxy_warning_shown = False
 
 AVAILABLE_SOURCES = {
     "reddit",
@@ -29,6 +32,8 @@ AVAILABLE_SOURCES = {
     "hacker_news",
     "github_issues",
     "product_hunt",
+    "stack_overflow",
+    "dev_to",
     "support_forums",
     "changelogs",
     "discord_exports",
@@ -37,6 +42,7 @@ AVAILABLE_SOURCES = {
 
 
 def get_scraper(source: str, settings: Settings) -> Optional[BaseScraper]:
+    global _g2_proxy_warning_shown
     if source in settings.sources.disabled_sources:
         logger.info("Source '%s' is disabled, skipping.", source)
         return None
@@ -44,6 +50,10 @@ def get_scraper(source: str, settings: Settings) -> Optional[BaseScraper]:
     if source == "reddit":
         return RedditScraper(settings.reddit)
     elif source == "g2":
+        if not settings.g2.proxy_url and not _g2_proxy_warning_shown:
+            from src.ui.display import print_g2_proxy_warning
+            print_g2_proxy_warning()
+            _g2_proxy_warning_shown = True
         return G2Scraper(settings.g2)
     elif source == "app_store":
         return AppStoreScraper(settings.app_store)
@@ -57,6 +67,10 @@ def get_scraper(source: str, settings: Settings) -> Optional[BaseScraper]:
         return GitHubIssuesScraper(settings.github_issues)
     elif source == "product_hunt":
         return ProductHuntScraper(settings.product_hunt)
+    elif source == "stack_overflow":
+        return StackOverflowScraper(settings.stack_overflow)
+    elif source == "dev_to":
+        return DevToScraper(settings.dev_to)
     elif source == "support_forums":
         return SupportForumsScraper(settings.support_forums)
     elif source == "changelogs":
@@ -95,8 +109,6 @@ def is_source_configured(source: str, settings: Settings) -> bool:
         return bool(settings.play_store.package_names)
     if source == "youtube":
         return bool(settings.youtube.api_key and settings.youtube.video_ids)
-    if source == "github_issues":
-        return bool(settings.github_issues.repos)
     if source == "support_forums":
         return bool(settings.support_forums.search_urls)
     if source == "changelogs":
@@ -105,4 +117,7 @@ def is_source_configured(source: str, settings: Settings) -> bool:
         return bool(settings.discord_exports.paths or settings.discord_exports.urls)
     if source == "linkedin_comments":
         return bool(settings.linkedin_comments.paths or settings.linkedin_comments.urls)
-    return source in {"g2", "hacker_news", "product_hunt"}
+    if source == "g2":
+        return bool(settings.g2.proxy_url)
+    # These sources work without any configuration (auto-discover or open APIs)
+    return source in {"hacker_news", "github_issues", "product_hunt", "stack_overflow", "dev_to"}

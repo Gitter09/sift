@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from typing import Any, Iterable, List, Optional
 from urllib.parse import quote_plus
@@ -12,12 +13,14 @@ from curl_cffi import requests as curl_requests
 from src.config import (
     AppStoreConfig,
     ChangelogsConfig,
+    DevToConfig,
     DiscordExportsConfig,
     GitHubIssuesConfig,
     HackerNewsConfig,
     LinkedInCommentsConfig,
     PlayStoreConfig,
     ProductHuntConfig,
+    StackOverflowConfig,
     SupportForumsConfig,
     YouTubeConfig,
 )
@@ -57,6 +60,16 @@ class RequestsScraper(BaseScraper):
             logger.warning("%s failed to fetch JSON from %s: %s", self.source_name, url, e)
             return None
 
+    def _post_json(self, url: str, json_data: dict, headers: dict | None = None) -> Optional[Any]:
+        self.rate_limiter.wait()
+        try:
+            resp = self._curl_session._session.post(url, json=json_data, headers=headers, timeout=20)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.warning("%s POST to %s failed: %s", self.source_name, url, e)
+            return None
+
     def _get_html(self, url: str, **kwargs) -> Optional[BeautifulSoup]:
         self.rate_limiter.wait()
 
@@ -72,6 +85,7 @@ class RequestsScraper(BaseScraper):
         # Tier 2: Playwright fallback
         pw_resp = self._browser_fetcher.fetch_playwright(url)
         if pw_resp is not None:
+            logger.info("%s Playwright fallback succeeded for %s", self.source_name, url)
             return BeautifulSoup(pw_resp.text, "html.parser")
 
         logger.warning("%s failed to fetch HTML from %s", self.source_name, url)
@@ -227,14 +241,17 @@ class HackerNewsScraper(RequestsScraper):
 
     def scrape(self, product_name: str) -> List[FeedbackItem]:
         items: List[FeedbackItem] = []
+        cutoff = int(time.time()) - self.config.recency_days * 86400
+        recency = quote_plus(f"created_at_i>{cutoff}")
 
-        # Search stories first, then fetch their comment trees. Direct HN
-        # comment search often misses product mentions when the story title
-        # carries the product name but individual comments do not.
+        # search_by_date returns newest first; recency filter drops stale results.
+        # Search stories first, then fetch their comment trees — direct comment
+        # search misses mentions where the story title carries the product name.
         story_url = (
-            "https://hn.algolia.com/api/v1/search"
+            "https://hn.algolia.com/api/v1/search_by_date"
             f"?query={quote_plus(product_name)}&tags=story"
             f"&hitsPerPage={min(10, self.config.max_items)}"
+            f"&numericFilters={recency}"
         )
         story_data = self._get_json(story_url)
         for hit in story_data.get("hits", []) if isinstance(story_data, dict) else []:
@@ -251,9 +268,10 @@ class HackerNewsScraper(RequestsScraper):
                 return items[: self.config.max_items]
 
         comment_url = (
-            "https://hn.algolia.com/api/v1/search"
+            "https://hn.algolia.com/api/v1/search_by_date"
             f"?query={quote_plus(product_name)}&tags=comment"
             f"&hitsPerPage={self.config.max_items}"
+            f"&numericFilters={recency}"
         )
         comment_data = self._get_json(comment_url)
         for hit in comment_data.get("hits", []) if isinstance(comment_data, dict) else []:
@@ -307,15 +325,18 @@ class GitHubIssuesScraper(RequestsScraper):
         return "github_issues"
 
     def scrape(self, product_name: str) -> List[FeedbackItem]:
-        repos = self.config.repos.get(product_name, [])
-        if not repos:
-            logger.info("GitHub repos not configured for '%s', skipping.", product_name)
-            return []
-
         headers = {"Accept": "application/vnd.github+json"}
         if self.config.token:
             headers["Authorization"] = f"Bearer {self.config.token}"
 
+        repos = self.config.repos.get(product_name, [])
+        if repos:
+            return self._scrape_repos(product_name, repos, headers)
+        return self._search_all_github(product_name, headers)
+
+    def _scrape_repos(
+        self, product_name: str, repos: List[str], headers: dict
+    ) -> List[FeedbackItem]:
         items: List[FeedbackItem] = []
         for repo in repos:
             query = quote_plus(f"repo:{repo} {product_name} is:issue")
@@ -337,6 +358,59 @@ class GitHubIssuesScraper(RequestsScraper):
                     return items
         return items
 
+    def _search_all_github(self, product_name: str, headers: dict) -> List[FeedbackItem]:
+        """Search all of GitHub for issues mentioning the product (no repos needed)."""
+        query = quote_plus(f'"{product_name}" in:title is:issue')
+        url = (
+            f"https://api.github.com/search/issues"
+            f"?q={query}&sort=created&order=desc&per_page={self.config.max_items}"
+        )
+        data = self._get_json(url, headers=headers)
+        items: List[FeedbackItem] = []
+        for issue in data.get("items", []) if isinstance(data, dict) else []:
+            text = f"{issue.get('title', '')}\n\n{issue.get('body') or ''}".strip()
+            if len(text) < 20:
+                continue
+            repo_url = issue.get("repository_url", "")
+            repo = "/".join(repo_url.split("/")[-2:]) if repo_url else ""
+            items.append(FeedbackItem(
+                source=self.source_name,
+                product=product_name,
+                text=text,
+                url=issue.get("html_url"),
+                date=_parse_datetime(issue.get("created_at")),
+                metadata={"repo": repo, "state": issue.get("state"), "comments": issue.get("comments")},
+            ))
+            if len(items) >= self.config.max_items:
+                break
+        logger.info("GitHub Issues: collected %d issues for '%s'", len(items), product_name)
+        return items
+
+
+_PH_GRAPHQL_URL = "https://api.producthunt.com/v2/api/graphql"
+
+_PH_SEARCH_QUERY = """
+query($q: String!) {
+  posts(first: 5, search: $q, order: RANKING) {
+    edges {
+      node {
+        name
+        slug
+        tagline
+        comments(first: 20) {
+          edges {
+            node {
+              id
+              body
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
 
 class ProductHuntScraper(RequestsScraper):
     def __init__(self, config: ProductHuntConfig):
@@ -352,6 +426,61 @@ class ProductHuntScraper(RequestsScraper):
         return "product_hunt"
 
     def scrape(self, product_name: str) -> List[FeedbackItem]:
+        if self.config.developer_token:
+            items = self._scrape_via_api(product_name)
+            if items:
+                return items
+            logger.warning("Product Hunt API returned no results for '%s', falling back to HTML", product_name)
+        return self._scrape_via_html(product_name)
+
+    def _scrape_via_api(self, product_name: str) -> List[FeedbackItem]:
+        headers = {
+            "Authorization": f"Bearer {self.config.developer_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        payload = {"query": _PH_SEARCH_QUERY, "variables": {"q": product_name}}
+        data = self._post_json(_PH_GRAPHQL_URL, payload, headers=headers)
+        if not isinstance(data, dict):
+            return []
+
+        items: List[FeedbackItem] = []
+        posts = data.get("data", {}).get("posts", {}).get("edges", [])
+        for edge in posts:
+            node = edge.get("node", {})
+            post_name = node.get("name", "")
+            slug = node.get("slug", "")
+            tagline = node.get("tagline", "")
+            post_url = f"https://www.producthunt.com/posts/{slug}" if slug else None
+
+            # Include the tagline as a feedback item
+            if tagline and len(tagline) >= 20:
+                items.append(FeedbackItem(
+                    source=self.source_name,
+                    product=product_name,
+                    text=f"{post_name}\n\n{tagline}".strip(),
+                    url=post_url,
+                    metadata={"slug": slug, "type": "tagline"},
+                ))
+
+            for comment_edge in node.get("comments", {}).get("edges", []):
+                body = (comment_edge.get("node") or {}).get("body", "")
+                if len(body) < 20:
+                    continue
+                items.append(FeedbackItem(
+                    source=self.source_name,
+                    product=product_name,
+                    text=body,
+                    url=post_url,
+                    metadata={"slug": slug, "type": "comment"},
+                ))
+                if len(items) >= self.config.max_items:
+                    return items
+
+        logger.info("Product Hunt API: collected %d items for '%s'", len(items), product_name)
+        return items
+
+    def _scrape_via_html(self, product_name: str) -> List[FeedbackItem]:
         slug = self.config.slugs.get(product_name, product_name.lower().replace(" ", "-"))
         url = f"https://www.producthunt.com/products/{slug}"
         soup = self._get_html(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -451,6 +580,87 @@ class ChangelogScraper(SearchPageScraper):
         if self.config.search_urls and len(items) < self.config.max_items:
             items.extend(self._items_from_pages(product_name))
         return items[: self.config.max_items]
+
+
+class StackOverflowScraper(RequestsScraper):
+    def __init__(self, config: StackOverflowConfig):
+        super().__init__(config.max_requests_per_minute, config.request_delay)
+        self.config = config
+
+    @property
+    def source_name(self) -> str:
+        return "stack_overflow"
+
+    def scrape(self, product_name: str) -> List[FeedbackItem]:
+        items: List[FeedbackItem] = []
+        for site in self.config.sites:
+            params = (
+                f"q={quote_plus(product_name)}"
+                f"&site={quote_plus(site)}"
+                f"&order=desc&sort=creation"
+                f"&pagesize={min(30, self.config.max_items)}"
+            )
+            if self.config.api_key:
+                params += f"&key={quote_plus(self.config.api_key)}"
+            url = f"https://api.stackexchange.com/2.3/search/excerpts?{params}"
+            data = self._get_json(url)
+            if not isinstance(data, dict):
+                continue
+            for item in data.get("items", []):
+                title = item.get("title", "")
+                excerpt = _html_to_text(item.get("excerpt") or "")
+                text = f"{title}\n\n{excerpt}".strip() if title else excerpt
+                if len(text) < 20:
+                    continue
+                items.append(FeedbackItem(
+                    source=self.source_name,
+                    product=product_name,
+                    text=text,
+                    url=item.get("link"),
+                    metadata={"site": site, "item_type": item.get("item_type")},
+                ))
+                if len(items) >= self.config.max_items:
+                    return items
+        logger.info("Stack Overflow: collected %d items for '%s'", len(items), product_name)
+        return items
+
+
+class DevToScraper(RequestsScraper):
+    def __init__(self, config: DevToConfig):
+        super().__init__(config.max_requests_per_minute, config.request_delay)
+        self.config = config
+
+    @property
+    def source_name(self) -> str:
+        return "dev_to"
+
+    def scrape(self, product_name: str) -> List[FeedbackItem]:
+        url = (
+            "https://dev.to/search/feed_content"
+            f"?per_page={self.config.max_items}"
+            f"&q={quote_plus(product_name)}"
+            "&content_type=article"
+        )
+        data = self._get_json(url)
+        items: List[FeedbackItem] = []
+        for result in (data or {}).get("result", []):
+            title = result.get("title", "")
+            description = result.get("description") or result.get("body_preview") or ""
+            text = f"{title}\n\n{description}".strip()
+            if len(text) < 20:
+                continue
+            path = result.get("path", "")
+            items.append(FeedbackItem(
+                source=self.source_name,
+                product=product_name,
+                text=text,
+                url=f"https://dev.to{path}" if path else None,
+                metadata={"tag_list": result.get("tag_list", [])},
+            ))
+            if len(items) >= self.config.max_items:
+                break
+        logger.info("Dev.to: collected %d articles for '%s'", len(items), product_name)
+        return items
 
 
 class JsonExportScraper(BaseScraper):

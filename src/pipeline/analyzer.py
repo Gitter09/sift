@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import List
 from openai import OpenAI
 from src.models.cluster import ClusterResult
@@ -97,19 +98,27 @@ class Analyzer:
         except Exception as exc:
             self._unavailable_reason = f"LLM client setup failed: {exc}"
 
-    def _call_llm(self, prompt: str) -> str:
+    def _call_llm(self, prompt: str, _retries: int = 2) -> str:
         if self.client is None:
             raise RuntimeError(self._unavailable_reason or "LLM client is unavailable")
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
-        return (response.choices[0].message.content or "").strip()
+        last_exc: Exception = RuntimeError("LLM returned empty response")
+        for attempt in range(_retries + 1):
+            if attempt:
+                time.sleep(attempt)
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+            )
+            content = (response.choices[0].message.content or "").strip()
+            if content:
+                return content
+            logger.debug("LLM returned empty response on attempt %d/%d", attempt + 1, _retries + 1)
+        raise last_exc
 
     def analyze_cluster(self, cluster: ClusterResult) -> ClusterResult:
         quotes = "\n".join(f"- \"{q}\"" for q in cluster.representative_quotes)

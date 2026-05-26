@@ -266,3 +266,93 @@ Both tiers are configurable via `use_playwright_fallback` in `config.yaml` per-s
 **Decision:** Added a small clustering bootstrap helper that sets `NUMBA_CACHE_DIR` to a writable temp directory (`sift-numba-cache`) before importing UMAP, while preserving any user-provided `NUMBA_CACHE_DIR`.
 **Why:** The clustering stack should not depend on write access to global Python package directories. A temp-backed default keeps CLI and test runs portable across locked-down global installs, virtualenvs, and CI while still allowing advanced users to choose their own cache location.
 **LinkedIn Angle:** "A tiny environment default saved my ML pipeline from global Python permissions: make caches explicit before libraries guess wrong."
+
+---
+
+## Decision 025: HN Recency Filter via `search_by_date`
+
+**Date:** 2026-05-26
+**Context:** Hacker News searches used the Algolia `search` endpoint, which ranks by relevance (upvotes × recency). For product research, a highly upvoted 3-year-old thread dominated results over recent discussions, making Sift's HN output historically skewed rather than current.
+**Decision:** Switched both story and comment searches from the `search` endpoint to `search_by_date`, adding a `numericFilters=created_at_i>{cutoff}` parameter. Default window is 180 days, configurable via `hacker_news.recency_days` in `config.yaml`.
+**Why:** Product feedback is time-sensitive — a complaint about a bug fixed two years ago is noise, not signal. The `search_by_date` endpoint returns results sorted by creation time, and the `numericFilters` unix timestamp cutoff excludes anything older than the configured window without requiring a post-fetch filter pass.
+**LinkedIn Angle:** "One Algolia endpoint swap turned our HN scraper from a history lesson into actual recent product feedback."
+
+---
+
+## Decision 026: G2 Paid-Proxy Warning and Proxy Pass-Through
+
+**Date:** 2026-05-26
+**Context:** G2 reviews are behind Cloudflare and Akamai bot protection. Even with curl_cffi TLS fingerprint impersonation and a Playwright fallback, G2 consistently returned 403s in practice. Users who included G2 as a source got 0 results with no explanation.
+**Decision:** When G2 is selected without a proxy configured, Sift now shows a Rich Panel warning explaining the limitation and listing compatible paid proxy services (ScraperAPI, ZenRows, BrightData, Oxylabs) with exact config instructions for both `config.yaml` (`g2.proxy_url`) and `.env` (`G2_PROXY_URL`). The scraper still runs — occasional Cloudflare misses do occur — but the user understands the expected outcome. Proxy URLs are passed to curl_cffi via `proxies={"https": url, "http": url}`.
+**Why:** Silently returning 0 results from a source the user explicitly selected is misleading. The warning turns a confusing failure into an actionable diagnosis: "add a proxy to fix this." Keeping the scraper running preserves value for users who have proxies and for the rare successful bypass.
+**LinkedIn Angle:** "Don't silently fail on Cloudflare — tell the user exactly what's blocked and exactly how to unblock it."
+
+---
+
+## Decision 027: Product Hunt GraphQL API v2 as Primary Path
+
+**Date:** 2026-05-26
+**Context:** Product Hunt's HTML structure is heavily JavaScript-rendered and frequently returns 403s to headless browsers. The scraper was getting 0 results in most runs. Product Hunt offers an official GraphQL API v2 with free developer tokens.
+**Decision:** Rewrote `ProductHuntScraper` to use the official PH GraphQL API v2 (`https://api.producthunt.com/v2/api/graphql`) as the primary path. The `PRODUCT_HUNT_TOKEN` env var (or `product_hunt.developer_token` in config) enables the API path, which fetches posts + taglines + comments via a single GraphQL query. When no token is configured, the scraper falls back to the original HTML scraping path.
+**Why:** Using an official API is more reliable, faster, and respects the platform's intended access model. The free developer token has generous limits for research workloads. Keeping HTML as a fallback means the scraper still attempts something when no token is set rather than returning 0 results immediately.
+**LinkedIn Angle:** "When a site keeps 403-ing your scraper, check if they have an official API — Product Hunt's is free and works perfectly."
+
+---
+
+## Decision 028: GitHub Issues Auto-Discovery Without Repo Config
+
+**Date:** 2026-05-26
+**Context:** `GitHubIssuesScraper` only fetched issues from repos explicitly listed in `github_issues.repos` config. For most products, users didn't know which repos to list, so the scraper was a no-op by default despite GitHub having an open search API.
+**Decision:** `GitHubIssuesScraper.scrape()` now checks `config.repos` first; if no repos are configured for the product, it falls back to `_search_all_github()`, which queries the GitHub search API (`/search/issues?q="product"+in:title&sort=created&order=desc`) across all public repositories. Explicit repo lists still take priority and use the per-repo fetch path.
+**Why:** GitHub Issues contains high-signal technical complaints and feature requests. Making it zero-config — search all of GitHub when no repos are specified — means every product gets GitHub coverage out of the box without any setup. The search API is free and unauthenticated at 10 req/min (60/min with a token).
+**LinkedIn Angle:** "Stop requiring config before your tool does anything useful — GitHub's search API makes issues discovery zero-config."
+
+---
+
+## Decision 029: Stack Overflow Scraper via Stack Exchange Open API
+
+**Date:** 2026-05-26
+**Context:** Stack Overflow is a high-signal source of product pain points (questions about bugs, missing features, confusing APIs). The Stack Exchange API v2.3 is public and requires no key for basic usage, making it a natural zero-config source.
+**Decision:** Added `StackOverflowScraper` using the `/search/excerpts` Stack Exchange API endpoint. Returns question titles and excerpts sorted by relevance. The API allows 300 requests/day unauthenticated; registering a free app at stackapps.com raises this to 10,000/day (`STACK_OVERFLOW_KEY` env var / `stack_overflow.api_key` config). Added to `default_sources`.
+**Why:** Stack Overflow questions represent real developer friction that product teams need to know about. The excerpts endpoint returns enough context (title + body snippet) to feed the clustering pipeline without needing full question fetches. Zero-config default with an optional key for higher limits matches Sift's design principle of working out of the box while rewarding configuration.
+**LinkedIn Angle:** "Stack Overflow has a free API that needs no signup — and it's one of the best sources of honest product pain points."
+
+---
+
+## Decision 030: Dev.to Scraper via Internal Search Endpoint
+
+**Date:** 2026-05-26
+**Context:** Dev.to articles frequently contain product reviews, tutorials, and criticism that reflect developer sentiment. Dev.to has no official public API, but its internal search endpoint (`/search/feed_content`) is used by its own frontend and returns structured JSON without authentication.
+**Decision:** Added `DevToScraper` using `https://dev.to/search/feed_content?q={query}&content_type=article`. Returns article titles and body previews. No API key or registration required. Added to `default_sources`.
+**Why:** Dev.to content skews toward developer products and tools — exactly the audience Sift's target users care about. The internal endpoint returns clean structured JSON and has no documented rate limits (politely throttled to 20 req/min). Using an undocumented internal endpoint carries the risk of breakage, but it's the same data the public site serves and is a reasonable pragmatic choice for a research tool.
+**LinkedIn Angle:** "Dev.to has no public API, but its frontend does — and the internal search endpoint returns exactly the structured data you need."
+
+---
+
+## Decision 031: Pipeline Progress Bar Per-Cluster Granularity
+
+**Date:** 2026-05-26
+**Context:** `PipelineProgress` tracked 4 fixed stages (embed, cluster, analyze, insights). For a product with 7 clusters, the bar jumped from 50% to 75% only after all 7 LLM calls completed — sometimes a 2–3 minute freeze with no visual feedback that anything was happening.
+**Decision:** Added `set_total()` to `PipelineProgress` so the total can be updated after clustering reveals the cluster count. `cli.py:run_analyze` starts with `total_stages=2` (embed + cluster), then calls `pipeline.set_total(2 + n + 1)` once clustering completes, and advances once per cluster in a per-cluster loop with description "Analysing — {product} ({i}/{n})". The final insights call advances the last unit.
+**Why:** The progress bar is the user's only signal that a long-running operation is alive. A 3-minute freeze at 50% looks like a hang. Per-cluster granularity makes the bar move once per LLM call (~5–15 seconds) and shows which cluster number is being processed, giving the user a live ETA feel even without an actual time estimate.
+**LinkedIn Angle:** "A progress bar that freezes for 3 minutes at 50% is worse than no progress bar — make it tick once per unit of real work."
+
+---
+
+## Decision 032: G2 Excluded from Default Sources Without a Proxy
+
+**Date:** 2026-05-26
+**Context:** G2 was always included in `default_sources()` because `is_source_configured("g2")` returned `True` unconditionally. Users who never configured a G2 proxy would see the large yellow proxy-warning panel every time they ran a multi-product analysis — once per product — even if they had not intentionally selected G2.
+**Decision:** Changed `is_source_configured("g2", settings)` to return `bool(settings.g2.proxy_url)`. G2 now only appears in default sources when a proxy is configured. Also added a module-level `_g2_proxy_warning_shown` flag in `factory.py` so the proxy warning is printed at most once per process, regardless of how many products are being analyzed.
+**Why:** A source that reliably returns 0 results (because Cloudflare blocks every request without a proxy) should not be in the default active set. It wastes time, prints a confusing warning, and trains users to ignore warnings. The warning deduplication prevents repetitive noise when multiple products are analyzed in a single run.
+**LinkedIn Angle:** "If a scraper needs paid infrastructure to work, it shouldn't silently appear in your default sources — gate it on configuration."
+
+---
+
+## Decision 033: Progress Bars Persist and Show M-of-N Counts
+
+**Date:** 2026-05-26
+**Context:** Both `ScrapeProgress` and `PipelineProgress` used `transient=True`, which erases the bar from the terminal when the context block exits. Users saw the bar flash briefly and disappear — it was purely decorative because no trace remained after completion. The percentage also jumped in large steps rather than advancing smoothly.
+**Decision:** Removed `transient=True` from both progress classes so bars stay visible after completion. Added `MofNCompleteColumn` between the bar and the percentage so the output reads e.g. "7/16 • 44% • 0:08" — showing tasks completed rather than just a fraction of the filled rectangle.
+**Why:** A progress indicator that vanishes the moment work is done provides no information — it can't be read after the fact and doesn't let the user gauge how long a phase took. Persisting the bar turns it into a lightweight execution log: users can see that scraping took 16 tasks and the pipeline took 5 stages, which is genuinely useful context when something is slow or fails.
+**LinkedIn Angle:** "A progress bar that disappears the moment it hits 100% is a spinner in disguise — persist it so users can actually read what just happened."

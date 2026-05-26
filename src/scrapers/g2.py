@@ -66,8 +66,10 @@ class G2Scraper(BaseScraper):
         for attempt in range(total_attempts):
             self.rate_limiter.wait()
 
-            # --- Tier 1: curl_cffi ----------------------------------------
-            resp = self._curl_session.get(url, headers=headers, timeout=15)
+            # --- Tier 1: curl_cffi (with optional proxy) ------------------
+            proxy = self.config.proxy_url or None
+            proxies = {"https": proxy, "http": proxy} if proxy else None
+            resp = self._curl_session.get(url, headers=headers, timeout=15, proxies=proxies)
 
             if resp is not None and resp.status_code == 200:
                 return resp
@@ -166,8 +168,8 @@ class G2Scraper(BaseScraper):
 
             if not review_elements:
                 logger.info(
-                    "G2 no reviews found on page %d for '%s', stopping pagination",
-                    page, product_name,
+                    "G2 no reviews found on page %d for '%s' (%s), stopping pagination",
+                    page, product_name, url,
                 )
                 break
 

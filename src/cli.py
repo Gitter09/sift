@@ -105,19 +105,25 @@ def run_analyze(
     with ScrapeProgress(total=total_scrape_tasks) as scrape_progress:
         for product in products:
             feedback: list[FeedbackItem] = []
+            source_counts: dict[str, int] = {}
             for src in sources:
                 scraper = get_scraper(src, settings)
                 if scraper:
                     scrape_progress.update_desc(f"Scraping {src} › {product}")
                     try:
                         items = scraper.scrape(product)
+                        source_counts[src] = len(items)
                         feedback.extend(items)
                     except Exception:
                         logger.exception("Scraper '%s' failed for '%s'.", src, product)
                         print_scraper_warning(src, product)
+                        source_counts[src] = 0
                 else:
                     print_no_scraper(src)
                 scrape_progress.advance()
+
+            counts_str = ", ".join(f"{s}={source_counts.get(s, 0)}" for s in sources if s in source_counts)
+            logger.info("Source breakdown for '%s': %s", product, counts_str)
 
             # Deduplicate and cap
             total_before = len(feedback)
@@ -144,7 +150,7 @@ def run_analyze(
         analyzer_inst = Analyzer(settings.llm)
         comparator = Comparator(settings.llm)
 
-        with PipelineProgress(total_stages=4) as pipeline:
+        with PipelineProgress(total_stages=2) as pipeline:
             pipeline.stage(f"Embedding — {product}")
             embeddings = embedder.embed(feedback)
             pipeline.advance()
@@ -153,9 +159,15 @@ def run_analyze(
             clusters = clusterer.cluster(embeddings, feedback)
             pipeline.advance()
 
-            pipeline.stage(f"LLM Analysis — {product}")
-            clusters = analyzer_inst.analyze_clusters(clusters)
-            pipeline.advance()
+            # Expand total now that we know the cluster count so the bar
+            # advances once per LLM call rather than jumping 25% at a time.
+            n = len(clusters)
+            pipeline.set_total(2 + n + 1)
+
+            for i, cluster in enumerate(clusters, 1):
+                pipeline.stage(f"Analysing — {product} ({i}/{n})")
+                analyzer_inst.analyze_cluster(cluster)
+                pipeline.advance()
 
             pipeline.stage(f"Insights — {product}")
             insights = analyzer_inst.generate_overall_insights(product, clusters)
