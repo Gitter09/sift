@@ -178,6 +178,16 @@ This document chronicles every significant architectural decision made during th
 **Why:** Separating test, build, smoke-test, GitHub Release, and PyPI jobs keeps the release chain auditable. GitHub Release assets provide an immediate no-clone download path. PyPI publishing remains manual because the `sift` project name already exists on PyPI and will require either ownership of that project or a unique package rename before trusted publishing can succeed.
 **LinkedIn Angle:** "The package release workflow I wish every CLI tool had: test it, build it, install the wheel, then publish only what actually runs."
 
+---
+
+## Decision 018: Rename Distribution Package to getsift
+
+**Date:** 2026-05-26
+**Context:** The `sift` distribution name is already occupied on PyPI, but the project should keep the user-facing CLI command and product name as Sift.
+**Decision:** Renamed the Python distribution package from `sift` to `getsift` while preserving the console entry point as `sift`.
+**Why:** Package names and command names are independent in Python packaging. Using `getsift` gives the project a publishable installer name (`pip install getsift`) without forcing users to run a different command or changing the product brand across the codebase.
+**LinkedIn Angle:** "A practical packaging lesson: when the PyPI name is taken, rename the installer, not the product."
+
 
 ---
 
