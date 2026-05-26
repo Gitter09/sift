@@ -1,45 +1,78 @@
-import json
 import logging
 from typing import List
 from openai import OpenAI
 from src.models.cluster import ClusterResult
 from src.config import LLMConfig
+from src.pipeline.llm_json import log_parse_debug, parse_json_object
 
 logger = logging.getLogger(__name__)
 
 
-ANALYZE_CLUSTER_PROMPT = """You are a product research analyst. Analyze this cluster of user feedback/complaints about a product.
+SYSTEM_PROMPT = """You are Sift's product research analyst.
 
-Cluster representative quotes:
+Your job is to turn scraped user feedback into evidence-bound product research.
+Use only the provided input. Do not invent causes, features, competitors, or facts.
+Return exactly one JSON object. Do not use markdown, commentary, or code fences."""
+
+
+ANALYZE_CLUSTER_PROMPT = """TASK
+Analyze one complaint cluster for the product "{product}".
+
+INPUT
+Total feedback items in this cluster: {size}
+Representative quotes:
 {quotes}
 
-Total items in this cluster: {size}
+SEVERITY RUBRIC
+- high: frequent or emotionally intense pain that blocks adoption, trust, or core workflows
+- medium: meaningful repeated friction that users can work around
+- low: minor annoyance, preference, or isolated complaint
 
-Provide your analysis in this exact JSON format:
+OUTPUT SCHEMA
 {{
-  "label": "short descriptive name for this complaint theme (3-5 words)",
-  "summary": "2-3 sentence summary of the pain point this cluster represents",
-  "severity": "high|medium|low (based on frequency and emotional intensity)"
+  "label": "2-5 word noun phrase naming the specific pain point",
+  "summary": "2-3 sentences synthesizing the cluster, grounded only in the quotes",
+  "severity": "high|medium|low"
 }}
 
-Respond only with the JSON, no additional text."""
+RULES
+- The label must be specific, not generic phrases like "User Complaints" or "Product Issues".
+- The severity value must be exactly one of: high, medium, low.
+- Return only the JSON object."""
 
 
-OVERALL_INSIGHTS_PROMPT = """You are a product research analyst. Given the following clustered pain points for the product "{product}", provide:
+OVERALL_INSIGHTS_PROMPT = """TASK
+Generate product-level insights for "{product}" from already-clustered feedback.
 
-1. A 3-4 sentence overall insight about the product's biggest weaknesses
-2. A prioritized list of top 3 pain points (most severe first)
-
+INPUT
 Cluster summaries:
 {cluster_summaries}
 
-Provide your analysis in this exact JSON format:
+OUTPUT SCHEMA
 {{
-  "overall_insights": "3-4 sentence overall assessment",
+  "overall_insights": "3-4 sentence assessment of the biggest product weaknesses",
   "top_pain_points": ["pain point 1", "pain point 2", "pain point 3"]
 }}
 
-Respond only with the JSON, no additional text."""
+RULES
+- Ground every claim in the provided cluster summaries.
+- Prioritize by severity first, then complaint count, then strategic importance.
+- Use no more than 3 top pain points. If fewer clusters are provided, return fewer.
+- Return only the JSON object."""
+
+
+REPAIR_JSON_PROMPT = """TASK
+Convert this model response into one valid JSON object matching the schema.
+
+SCHEMA
+{schema}
+
+MODEL RESPONSE
+{raw}
+
+RULES
+- Preserve the intended meaning when possible.
+- Return only the corrected JSON object."""
 
 
 class Analyzer:
@@ -69,15 +102,20 @@ class Analyzer:
             raise RuntimeError(self._unavailable_reason or "LLM client is unavailable")
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )
-        return response.choices[0].message.content.strip()
+        return (response.choices[0].message.content or "").strip()
 
     def analyze_cluster(self, cluster: ClusterResult) -> ClusterResult:
         quotes = "\n".join(f"- \"{q}\"" for q in cluster.representative_quotes)
+        product = cluster.items[0].product if cluster.items else "the product"
         prompt = ANALYZE_CLUSTER_PROMPT.format(
+            product=product,
             quotes=quotes,
             size=cluster.size,
         )
@@ -88,18 +126,10 @@ class Analyzer:
 
         try:
             raw = self._call_llm(prompt)
-            # Strip markdown code block markers if present
-            raw = raw.strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-            if raw.endswith("```"):
-                raw = raw[:-3]
-            raw = raw.strip()
-
-            result = json.loads(raw)
-            cluster.label = result.get("label", "Unnamed cluster")
-            cluster.summary = result.get("summary", "")
-            cluster.severity = result.get("severity", "medium")
+            result = self._parse_or_repair(raw, "cluster analysis", _CLUSTER_SCHEMA)
+            cluster.label = _clean_string(result.get("label")) or "Unnamed cluster"
+            cluster.summary = _clean_string(result.get("summary"))
+            cluster.severity = _normalize_severity(result.get("severity"))
         except Exception as exc:
             logger.warning(
                 "LLM analysis failed for cluster %d (%s: %s), using fallback labels.",
@@ -132,14 +162,8 @@ class Analyzer:
 
         try:
             raw = self._call_llm(prompt)
-            raw = raw.strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-            if raw.endswith("```"):
-                raw = raw[:-3]
-            raw = raw.strip()
-
-            return json.loads(raw)
+            result = self._parse_or_repair(raw, "overall insights", _OVERALL_SCHEMA)
+            return _normalize_overall_result(result, clusters)
         except Exception as exc:
             logger.warning(
                 "LLM overall insights generation failed for '%s' (%s: %s), using cluster labels as fallback.",
@@ -148,6 +172,16 @@ class Analyzer:
                 exc,
             )
             return self._overall_fallback(clusters, "LLM call failed")
+
+    def _parse_or_repair(self, raw: str, context: str, schema: str) -> dict:
+        try:
+            return parse_json_object(raw, logger, context)
+        except Exception as exc:
+            log_parse_debug(logger, context, raw, exc)
+
+        repair_prompt = REPAIR_JSON_PROMPT.format(schema=schema, raw=raw)
+        repaired = self._call_llm(repair_prompt)
+        return parse_json_object(repaired, logger, f"{context} repair")
 
     def _warn_unavailable_once(self) -> None:
         if self._warned_unavailable:
@@ -170,3 +204,41 @@ class Analyzer:
             "overall_insights": f"Analysis unavailable - {reason}",
             "top_pain_points": [c.label or f"Cluster {c.cluster_id}" for c in clusters[:3]],
         }
+
+
+_CLUSTER_SCHEMA = """{
+  "label": "2-5 word noun phrase",
+  "summary": "2-3 sentence cluster summary",
+  "severity": "high|medium|low"
+}"""
+
+_OVERALL_SCHEMA = """{
+  "overall_insights": "3-4 sentence product assessment",
+  "top_pain_points": ["pain point 1", "pain point 2", "pain point 3"]
+}"""
+
+
+def _clean_string(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _normalize_severity(value: object) -> str:
+    severity = value.strip().lower() if isinstance(value, str) else ""
+    return severity if severity in {"high", "medium", "low"} else "medium"
+
+
+def _normalize_string_list(value: object, limit: int | None = None) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    strings = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    return strings[:limit] if limit is not None else strings
+
+
+def _normalize_overall_result(result: dict, clusters: List[ClusterResult]) -> dict:
+    top_points = _normalize_string_list(result.get("top_pain_points"), limit=min(3, len(clusters)))
+    if not top_points:
+        top_points = [c.label or f"Cluster {c.cluster_id}" for c in clusters[:3]]
+    return {
+        "overall_insights": _clean_string(result.get("overall_insights")),
+        "top_pain_points": top_points,
+    }

@@ -16,6 +16,9 @@ from src.pipeline.rate_limiter import RateLimiter
 def _cluster(cluster_id: int = 0) -> ClusterResult:
     return ClusterResult(
         cluster_id=cluster_id,
+        representative_quotes=[
+            "Sync is unreliable and pages sometimes take a long time to load."
+        ],
         items=[
             FeedbackItem(
                 source="test",
@@ -55,6 +58,91 @@ def test_analyzer_llm_failure_uses_warning_not_exception_log(caplog):
     assert analyzed.label == "Cluster 0"
     assert "LLM call failed" in analyzed.summary
     assert "Traceback" not in caplog.text
+
+
+def test_analyzer_parses_markdown_fenced_json():
+    analyzer = Analyzer(LLMConfig(api_key="test-key"))
+
+    def call(prompt: str) -> str:
+        return """```json
+{
+  "label": "Slow Sync",
+  "summary": "Users report unreliable sync and slow page loading.",
+  "severity": "high"
+}
+```"""
+
+    analyzer._call_llm = call
+
+    analyzed = analyzer.analyze_cluster(_cluster())
+
+    assert analyzed.label == "Slow Sync"
+    assert analyzed.summary == "Users report unreliable sync and slow page loading."
+    assert analyzed.severity == "high"
+
+
+def test_analyzer_parses_prose_wrapped_overall_json():
+    analyzer = Analyzer(LLMConfig(api_key="test-key"))
+
+    def call(prompt: str) -> str:
+        return """Here is the JSON:
+{
+  "overall_insights": "The biggest weakness is reliability around sync and loading.",
+  "top_pain_points": ["Slow Sync", "Page Load Latency", "Reliability Gaps"]
+}
+Hope this helps."""
+
+    analyzer._call_llm = call
+
+    cluster = _cluster()
+    cluster.label = "Slow Sync"
+    cluster.summary = "Users report unreliable sync and slow page loading."
+    cluster.severity = "high"
+
+    insights = analyzer.generate_overall_insights("Notion", [cluster])
+
+    assert insights["overall_insights"].startswith("The biggest weakness")
+    assert insights["top_pain_points"] == ["Slow Sync"]
+
+
+def test_analyzer_invalid_severity_normalizes_to_medium():
+    analyzer = Analyzer(LLMConfig(api_key="test-key"))
+
+    def call(prompt: str) -> str:
+        return """{
+  "label": "Slow Sync",
+  "summary": "Users report unreliable sync.",
+  "severity": "critical"
+}"""
+
+    analyzer._call_llm = call
+
+    analyzed = analyzer.analyze_cluster(_cluster())
+
+    assert analyzed.severity == "medium"
+
+
+def test_analyzer_repairs_invalid_json_once():
+    analyzer = Analyzer(LLMConfig(api_key="test-key"))
+    calls = []
+
+    def call(prompt: str) -> str:
+        calls.append(prompt)
+        if len(calls) == 1:
+            return "label: Slow Sync, summary: Users report unreliable sync, severity: high"
+        return """{
+  "label": "Slow Sync",
+  "summary": "Users report unreliable sync.",
+  "severity": "high"
+}"""
+
+    analyzer._call_llm = call
+
+    analyzed = analyzer.analyze_cluster(_cluster())
+
+    assert analyzed.label == "Slow Sync"
+    assert analyzed.severity == "high"
+    assert len(calls) == 2
 
 
 def test_analyzer_overall_prompt_formats_before_llm_fallback(caplog):
@@ -103,6 +191,56 @@ def test_comparator_prompt_formats_before_llm_fallback(caplog):
         raise RuntimeError("boom")
 
     comparator._call_llm = fail_call
+
+    with caplog.at_level(logging.WARNING, logger="src.pipeline.comparator"):
+        comparison = comparator.compare({"Notion": report})
+
+    assert "LLM call failed" in comparison.competitive_insights
+    assert "Traceback" not in caplog.text
+
+
+def test_comparator_preserves_exact_product_keys_from_wrapped_json():
+    comparator = Comparator(LLMConfig(api_key="test-key"))
+    report = ProductReport(
+        product="Claude Code",
+        total_feedback_count=1,
+        clusters=[_cluster()],
+    )
+
+    def call(prompt: str) -> str:
+        return """Sure:
+{
+  "shared_pain_points": [],
+  "unique_pain_points": {
+    "Claude Code": ["Terminal workflow friction"],
+    "Not In Input": ["Should be ignored"]
+  },
+  "competitive_insights": "Claude Code feedback centers on workflow reliability."
+}"""
+
+    comparator._call_llm = call
+
+    comparison = comparator.compare({"Claude Code": report})
+
+    assert comparison.shared_pain_points == []
+    assert comparison.unique_pain_points == {
+        "Claude Code": ["Terminal workflow friction"]
+    }
+    assert comparison.competitive_insights.startswith("Claude Code feedback")
+
+
+def test_comparator_invalid_response_falls_back_without_traceback(caplog):
+    comparator = Comparator(LLMConfig(api_key="test-key"))
+    report = ProductReport(
+        product="Notion",
+        total_feedback_count=1,
+        clusters=[_cluster()],
+    )
+
+    def fail_repair(prompt: str) -> str:
+        return ""
+
+    comparator._call_llm = fail_repair
 
     with caplog.at_level(logging.WARNING, logger="src.pipeline.comparator"):
         comparison = comparator.compare({"Notion": report})

@@ -246,3 +246,23 @@ Both tiers are configurable via `use_playwright_fallback` in `config.yaml` per-s
 **Decision:** Replaced all decorative cyan/blue colors with a white/dim monochromatic hierarchy. The SIFT logo now renders with a top-to-bottom brightness gradient (`bold bright_white` → `bold white` → `white`) to add depth without color. Panel borders and prompt labels use `white` and `bold`. Implemented real arrow-key navigation for the main menu using raw terminal I/O (`termios`/`tty`/`select` from stdlib) — `↑`/`↓` moves a `▶` indicator, `Enter` confirms, `q` exits. Functional severity indicators (red/yellow/green) were deliberately preserved since they carry semantic meaning.
 **Why:** B&W aesthetics signal confidence — color is often used to compensate for weak visual structure, whereas a well-structured monochrome UI looks intentional and polished. The gradient on the logo gives perceived depth without brightness inconsistency. Arrow-key navigation is the standard expectation for any modern interactive CLI (fzf, lazygit, k9s all do this); a numbered prompt forces the user to read, remember, type, and press Enter when a single keypress is more natural. The raw-terminal approach uses only stdlib (`termios`, `tty`, `select`) — zero new dependencies — and handles the escape-sequence timing edge case with a 50ms `select()` drain to correctly distinguish bare Escape from arrow-key sequences.
 **LinkedIn Angle:** "Why I stripped all color from my CLI tool's UI — and how a top-to-bottom white gradient replaced it without losing any visual depth."
+
+---
+
+## Decision 023: Provider-Tolerant LLM Prompting and JSON Parsing
+
+**Date:** 2026-05-26
+**Context:** Sift uses OpenAI-compatible chat endpoints, but real deployments may route through providers such as OpenCode Go with DeepSeek models that do not always return pristine JSON even when prompted. A single non-JSON prefix, markdown fence, or empty response caused product-level insights and comparisons to fall back unnecessarily.
+**Decision:** Analyzer and comparator prompts now use explicit system/user message roles, evidence-bound task sections, output schemas, and rules that forbid invented facts or markdown. LLM responses are parsed through a shared tolerant JSON extractor that strips code fences, extracts the first balanced JSON object from wrapped prose, validates object shape, logs sanitized debug previews on parse failures, and makes one schema-focused repair attempt before falling back.
+**Why:** Prompt wording alone is not a reliability boundary when multiple OpenAI-compatible providers sit behind the same client interface. Combining clearer task framing with provider-tolerant parsing preserves Sift's current report schema while making analysis resilient to the common formatting quirks of non-OpenAI endpoints.
+**LinkedIn Angle:** "The real lesson from using 'OpenAI-compatible' APIs: compatibility gets you a response, but robust parsing turns it into a product feature."
+
+---
+
+## Decision 024: Writable Numba Cache for UMAP Imports
+
+**Date:** 2026-05-26
+**Context:** UMAP imports numba-compiled functions with caching enabled. On framework Python installs where global `site-packages` is not writable, importing `umap` can fail before Sift reaches clustering with `RuntimeError: cannot cache function 'rdist': no locator available`.
+**Decision:** Added a small clustering bootstrap helper that sets `NUMBA_CACHE_DIR` to a writable temp directory (`sift-numba-cache`) before importing UMAP, while preserving any user-provided `NUMBA_CACHE_DIR`.
+**Why:** The clustering stack should not depend on write access to global Python package directories. A temp-backed default keeps CLI and test runs portable across locked-down global installs, virtualenvs, and CI while still allowing advanced users to choose their own cache location.
+**LinkedIn Angle:** "A tiny environment default saved my ML pipeline from global Python permissions: make caches explicit before libraries guess wrong."

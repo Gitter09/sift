@@ -1,27 +1,36 @@
-import json
 import logging
 from typing import List, Dict
 from openai import OpenAI
 from src.models.report import ProductReport, ComparisonReport
 from src.config import LLMConfig
+from src.pipeline.llm_json import log_parse_debug, parse_json_object
 
 logger = logging.getLogger(__name__)
 
 
-COMPARISON_PROMPT = """You are a competitive product analyst. Compare these products based on their pain points and user feedback.
+SYSTEM_PROMPT = """You are Sift's competitive product research analyst.
 
-Products: {products}
+Your job is to compare product pain points using only the provided cluster summaries.
+Do not invent facts, market share, competitors, features, or causes.
+Return exactly one JSON object. Do not use markdown, commentary, or code fences."""
 
+
+COMPARISON_PROMPT = """TASK
+Compare these products based on clustered user pain points.
+
+PRODUCTS
+{products}
+
+INPUT
 Product summaries:
 {product_summaries}
 
-Analyze and provide:
+DEFINITIONS
+- shared_pain_points: issues semantically present across all compared products
+- unique_pain_points: issues present for one product and absent from the others
+- competitive_insights: strategic comparison based only on the listed pain points
 
-1. Shared pain points - issues that ALL products suffer from
-2. Unique pain points - issues specific to each product that competitors don't have
-3. Competitive insights - strategic recommendations based on the comparison
-
-Provide your analysis in this exact JSON format:
+OUTPUT SCHEMA
 {{
   "shared_pain_points": ["shared issue 1", "shared issue 2"],
   "unique_pain_points": {{
@@ -31,7 +40,25 @@ Provide your analysis in this exact JSON format:
   "competitive_insights": "3-4 sentence strategic comparison insight"
 }}
 
-Respond only with the JSON, no additional text."""
+RULES
+- unique_pain_points keys must exactly match the product names in PRODUCTS.
+- Use empty lists when there are no shared or unique pain points.
+- Do not include products not listed in PRODUCTS.
+- Return only the JSON object."""
+
+
+REPAIR_JSON_PROMPT = """TASK
+Convert this model response into one valid JSON object matching the schema.
+
+SCHEMA
+{schema}
+
+MODEL RESPONSE
+{raw}
+
+RULES
+- Preserve the intended meaning when possible.
+- Return only the corrected JSON object."""
 
 
 class Comparator:
@@ -61,11 +88,14 @@ class Comparator:
             raise RuntimeError(self._unavailable_reason or "LLM client is unavailable")
         response = self.client.chat.completions.create(
             model=self.model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )
-        return response.choices[0].message.content.strip()
+        return (response.choices[0].message.content or "").strip()
 
     def compare(self, reports: Dict[str, ProductReport]) -> ComparisonReport:
         products = list(reports.keys())
@@ -88,20 +118,14 @@ class Comparator:
 
         try:
             raw = self._call_llm(prompt)
-            raw = raw.strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-            if raw.endswith("```"):
-                raw = raw[:-3]
-            raw = raw.strip()
-
-            result = json.loads(raw)
+            result = self._parse_or_repair(raw)
+            normalized = _normalize_comparison_result(result, products)
             return ComparisonReport(
                 products=products,
                 product_reports=reports,
-                shared_pain_points=result.get("shared_pain_points", []),
-                unique_pain_points=result.get("unique_pain_points", {}),
-                competitive_insights=result.get("competitive_insights", ""),
+                shared_pain_points=normalized["shared_pain_points"],
+                unique_pain_points=normalized["unique_pain_points"],
+                competitive_insights=normalized["competitive_insights"],
             )
         except Exception as exc:
             logger.warning(
@@ -111,6 +135,16 @@ class Comparator:
                 exc,
             )
             return self._fallback_comparison(products, reports, "LLM call failed")
+
+    def _parse_or_repair(self, raw: str) -> dict:
+        try:
+            return parse_json_object(raw, logger, "comparison")
+        except Exception as exc:
+            log_parse_debug(logger, "comparison", raw, exc)
+
+        repair_prompt = REPAIR_JSON_PROMPT.format(schema=_COMPARISON_SCHEMA, raw=raw)
+        repaired = self._call_llm(repair_prompt)
+        return parse_json_object(repaired, logger, "comparison repair")
 
     def _warn_unavailable_once(self) -> None:
         if self._warned_unavailable:
@@ -141,3 +175,36 @@ class Comparator:
             unique_pain_points=unique,
             competitive_insights=f"Comparison analysis unavailable ({reason})",
         )
+
+
+_COMPARISON_SCHEMA = """{
+  "shared_pain_points": ["shared issue 1", "shared issue 2"],
+  "unique_pain_points": {
+    "Product Name": ["unique issue 1", "unique issue 2"]
+  },
+  "competitive_insights": "3-4 sentence strategic comparison insight"
+}"""
+
+
+def _clean_string(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _normalize_string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _normalize_comparison_result(result: dict, products: List[str]) -> dict:
+    raw_unique = result.get("unique_pain_points")
+    raw_unique = raw_unique if isinstance(raw_unique, dict) else {}
+    unique = {
+        product: _normalize_string_list(raw_unique.get(product))
+        for product in products
+    }
+    return {
+        "shared_pain_points": _normalize_string_list(result.get("shared_pain_points")),
+        "unique_pain_points": unique,
+        "competitive_insights": _clean_string(result.get("competitive_insights")),
+    }

@@ -1,6 +1,10 @@
 import logging
 import numpy as np
 from typing import List, Dict
+from src.pipeline.numba_cache import ensure_numba_cache_dir
+
+ensure_numba_cache_dir()
+
 from umap import UMAP
 import hdbscan
 from src.models.feedback import FeedbackItem
