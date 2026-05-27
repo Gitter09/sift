@@ -376,3 +376,23 @@ Both tiers are configurable via `use_playwright_fallback` in `config.yaml` per-s
 **Decision:** Added config-backed product profiles plus a pipeline-level relevance filter that runs after scraping and before deduplication, embedding, clustering, and LLM analysis. Profiles define aliases, negative terms, category, description, website, and stable identifiers. Each `FeedbackItem` gets relevance metadata, and the CLI reports how many off-context items were rejected.
 **Why:** Scrapers should collect candidates, not decide final product truth. A centralized relevance gate keeps the `BaseScraper` contract stable, applies one quality policy across every source, and prevents noisy candidates from contaminating expensive clustering and LLM stages.
 **LinkedIn Angle:** "Keyword search is not product understanding — add a relevance gate before your AI pipeline or your insights will confidently analyze the wrong thing."
+
+---
+
+## Decision 036: Adaptive LLM Request Parameters After Provider 400s
+
+**Date:** 2026-05-27
+**Context:** `deepseek-v4-pro` needed a larger output budget than the original 2000-token cap, but setting `max_tokens` to 32000 caused OpenAI-compatible gateways to reject every chat completion with `BadRequestError: Error code: 400`, making each cluster and comparison fall back with "LLM call failed".
+**Decision:** Keep Sift's default LLM output cap at 8000 tokens and route analyzer/comparator chat completions through a shared adaptive helper. When a provider 400 specifically names `max_tokens`, Sift retries with an 8000-token cap and then without `max_tokens`; when a provider 400 names `temperature`, it retries without `temperature`. Other bad requests still fail normally.
+**Why:** OpenAI-compatible APIs agree on endpoint shape, not on every model-specific parameter limit. Retrying the same invalid request wastes time and hides the real cause behind repeated fallback messages, while selective parameter adaptation preserves portability without masking unrelated configuration errors.
+**LinkedIn Angle:** "OpenAI-compatible does not mean parameter-compatible — robust AI tools adapt to provider 400s instead of retrying the same broken request."
+
+---
+
+## Decision 037: Escape-to-Exit With Save/Discard/Cancel in the Settings Wizard
+
+**Date:** 2026-05-27
+**Context:** The interactive Settings & API keys flow used `rich.prompt.Prompt.ask` for every required and optional field, which surrenders the TTY to readline. Users who opened the wizard accidentally, or who only wanted to update one key, had no way out without stepping through every remaining prompt.
+**Decision:** Built a small termios-based line reader (`read_line_with_escape`) and a Save/Discard/Cancel popup (`prompt_exit_choice`) in `src/ui/menu.py`, then refactored `run_setup_wizard` to use them. The reader echoes characters manually (masking with `*` for secrets), handles backspace and Ctrl-C, and distinguishes a bare Esc from arrow-key escape sequences using the same 50 ms `select` trick as the existing `_read_key`. On Esc, the wizard offers Save (commit values entered so far via `_save_env`), Discard (return without writing), or Cancel (resume at the same prompt). The popup defaults to Cancel so an accidental Enter is safe.
+**Why:** Pulling in `prompt_toolkit` for one keystroke would have doubled the UI stack and conflicted with Rich theming. Reusing the termios pattern already present in the main menu kept the change self-contained, matched the existing visual language (cyan-highlighted Panel, arrow-key navigation), and let us keep Rich for everything else. Save/Discard/Cancel is the standard mental model for unsaved-changes dialogs; defaulting to Cancel respects the principle that destructive choices should never be the one-keystroke path.
+**LinkedIn Angle:** "Good CLIs let users back out — adding an Esc handler to a Rich-based wizard is a 100-line change that prevents the most annoying form of UI lock-in."

@@ -216,7 +216,7 @@ class LLMConfig:
     base_url: str = "https://api.openai.com/v1"
     model: str = "gpt-4o-mini"
     temperature: float = 0.3
-    max_tokens: int = 2000
+    max_tokens: int = 8000
 
 
 @dataclass
@@ -429,7 +429,7 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             base_url=os.getenv("LLM_BASE_URL", llm_raw.get("base_url", "https://api.openai.com/v1")),
             model=os.getenv("LLM_MODEL", llm_raw.get("model", "gpt-4o-mini")),
             temperature=llm_raw.get("temperature", 0.3),
-            max_tokens=llm_raw.get("max_tokens", 2000),
+            max_tokens=llm_raw.get("max_tokens", 8000),
         ),
         max_feedback_per_source=int(os.getenv("MAX_FEEDBACK_PER_SOURCE", "100")),
         logging=LoggingConfig(

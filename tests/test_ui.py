@@ -105,7 +105,7 @@ def test_print_cluster_summary():
     out = _capture(print_cluster_summary, report)
     assert "AppX" in out
     assert "Crash on launch" in out
-    assert "high" in out.lower() or "🔴" in out
+    assert "high" in out.lower()
 
 
 def test_print_cluster_summary_no_clusters():
@@ -245,7 +245,7 @@ def test_print_relevance_summary():
 def test_print_no_reports():
     from src.ui.display import print_no_reports
     out = _capture(print_no_reports)
-    assert "No reports" in out
+    assert "No Reports Generated" in out or "No reports" in out
 
 
 def test_print_no_feedback_guidance():
@@ -262,3 +262,95 @@ def test_print_done_banner():
     out = _capture(print_done_banner, "output", ["output/appx_report.md", "output/appx_report.json"])
     assert "Done" in out
     assert "appx_report.md" in out
+
+
+# ---------------------------------------------------------------------------
+# Setup wizard: Escape-to-exit with Save/Discard/Cancel popup
+# ---------------------------------------------------------------------------
+
+
+def test_setup_wizard_discard_does_not_write_env(tmp_path, monkeypatch):
+    """Pressing Esc on the first prompt and choosing Discard must not touch .env."""
+    import src.ui.setup as setup_mod
+
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(setup_mod, "_ENV_PATH", env_path)
+
+    def fake_read_line(label, default="", password=False, show_default=True):
+        return None  # simulate Esc on the very first prompt
+
+    save_calls = []
+
+    def fake_save_env(new_values, existing):
+        save_calls.append(dict(new_values))
+
+    monkeypatch.setattr("src.ui.menu.read_line_with_escape", fake_read_line)
+    monkeypatch.setattr("src.ui.menu.prompt_exit_choice", lambda: "discard")
+    monkeypatch.setattr(setup_mod, "_save_env", fake_save_env)
+
+    setup_mod.run_setup_wizard()
+
+    assert save_calls == []
+    assert not env_path.exists()
+
+
+def test_setup_wizard_save_persists_partial_values(tmp_path, monkeypatch):
+    """Entering one value then Esc + Save must call _save_env with that value."""
+    import src.ui.setup as setup_mod
+
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(setup_mod, "_ENV_PATH", env_path)
+
+    calls = {"n": 0}
+
+    def fake_read_line(label, default="", password=False, show_default=True):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "sk-test-123"
+        return None  # Esc on the second prompt
+
+    save_calls = []
+
+    def fake_save_env(new_values, existing):
+        save_calls.append(dict(new_values))
+
+    monkeypatch.setattr("src.ui.menu.read_line_with_escape", fake_read_line)
+    monkeypatch.setattr("src.ui.menu.prompt_exit_choice", lambda: "save")
+    monkeypatch.setattr(setup_mod, "_save_env", fake_save_env)
+
+    setup_mod.run_setup_wizard()
+
+    assert len(save_calls) == 1
+    assert save_calls[0].get("LLM_API_KEY") == "sk-test-123"
+
+
+def test_setup_wizard_cancel_resumes(tmp_path, monkeypatch):
+    """Esc + Cancel must resume at the same prompt without saving."""
+    import src.ui.setup as setup_mod
+
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr(setup_mod, "_ENV_PATH", env_path)
+
+    # Sequence: prompt 1 returns None (Esc), then on resume returns a value,
+    # then every subsequent prompt returns "" to walk through quickly.
+    answers = iter([None, "sk-resumed"] + [""] * 20)
+
+    def fake_read_line(label, default="", password=False, show_default=True):
+        return next(answers)
+
+    choices = iter(["cancel"])
+    monkeypatch.setattr("src.ui.menu.read_line_with_escape", fake_read_line)
+    monkeypatch.setattr("src.ui.menu.prompt_exit_choice", lambda: next(choices))
+
+    save_calls = []
+
+    def fake_save_env(new_values, existing):
+        save_calls.append(dict(new_values))
+
+    monkeypatch.setattr(setup_mod, "_save_env", fake_save_env)
+
+    setup_mod.run_setup_wizard()
+
+    # Walked all the way through and saved at the end.
+    assert len(save_calls) == 1
+    assert save_calls[0].get("LLM_API_KEY") == "sk-resumed"

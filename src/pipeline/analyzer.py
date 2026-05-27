@@ -5,6 +5,7 @@ from typing import List
 from openai import OpenAI
 from src.models.cluster import ClusterResult
 from src.config import LLMConfig
+from src.pipeline.llm_client import LLMRequestOptions, create_chat_completion
 from src.pipeline.llm_json import log_parse_debug, parse_json_object
 
 
@@ -110,18 +111,14 @@ class Analyzer:
         if self.client is None:
             raise RuntimeError(self._unavailable_reason or "LLM client is unavailable")
         last_reason = "empty response"
+        request_options = LLMRequestOptions(
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
         for attempt in range(_retries + 1):
             if attempt:
                 time.sleep(attempt)
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-            )
+            response = self._create_chat_completion(prompt, request_options)
             choice = response.choices[0]
             message = choice.message
             finish_reason = getattr(choice, "finish_reason", None)
@@ -159,6 +156,13 @@ class Analyzer:
                 last_reason,
             )
         raise RuntimeError(f"LLM returned empty response: {last_reason}")
+
+    def _create_chat_completion(self, prompt: str, options: LLMRequestOptions):
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ]
+        return create_chat_completion(self.client, self.model, messages, options, logger)
 
     def analyze_cluster(self, cluster: ClusterResult) -> ClusterResult:
         quotes = "\n".join(f"- \"{q}\"" for q in cluster.representative_quotes)

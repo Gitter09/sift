@@ -3,6 +3,9 @@ import logging
 import sys
 import types
 
+import httpx
+from openai import BadRequestError
+
 from src.config import LLMConfig
 from src.models.cluster import ClusterResult
 from src.models.feedback import FeedbackItem
@@ -145,6 +148,49 @@ def test_analyzer_repairs_invalid_json_once():
     assert len(calls) == 2
 
 
+def test_analyzer_retries_oversized_max_tokens_bad_request():
+    analyzer = Analyzer(LLMConfig(api_key="test-key", max_tokens=32000))
+    calls = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                response = httpx.Response(
+                    400,
+                    request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+                )
+                raise BadRequestError(
+                    "max_tokens must be less than or equal to 8192",
+                    response=response,
+                    body={"error": {"message": "max_tokens is too large"}},
+                )
+            return types.SimpleNamespace(
+                choices=[
+                    types.SimpleNamespace(
+                        finish_reason="stop",
+                        message=types.SimpleNamespace(
+                            content="""{
+  "label": "Slow Sync",
+  "summary": "Users report unreliable sync.",
+  "severity": "high"
+}"""
+                        ),
+                    )
+                ]
+            )
+
+    analyzer.client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=FakeCompletions())
+    )
+
+    analyzed = analyzer.analyze_cluster(_cluster())
+
+    assert analyzed.label == "Slow Sync"
+    assert calls[0]["max_tokens"] == 32000
+    assert calls[1]["max_tokens"] == 8000
+
+
 def test_analyzer_overall_prompt_formats_before_llm_fallback(caplog):
     analyzer = Analyzer(LLMConfig(api_key="test-key"))
 
@@ -197,6 +243,53 @@ def test_comparator_prompt_formats_before_llm_fallback(caplog):
 
     assert "LLM call failed" in comparison.competitive_insights
     assert "Traceback" not in caplog.text
+
+
+def test_comparator_retries_unsupported_temperature_bad_request():
+    comparator = Comparator(LLMConfig(api_key="test-key"))
+    report = ProductReport(
+        product="Notion",
+        total_feedback_count=1,
+        clusters=[_cluster()],
+    )
+    calls = []
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                response = httpx.Response(
+                    400,
+                    request=httpx.Request("POST", "https://example.test/v1/chat/completions"),
+                )
+                raise BadRequestError(
+                    "temperature is not supported for this model",
+                    response=response,
+                    body={"error": {"message": "Unsupported parameter: temperature"}},
+                )
+            return types.SimpleNamespace(
+                choices=[
+                    types.SimpleNamespace(
+                        message=types.SimpleNamespace(
+                            content="""{
+  "shared_pain_points": [],
+  "unique_pain_points": {"Notion": ["Slow Sync"]},
+  "competitive_insights": "Notion feedback centers on sync reliability."
+}"""
+                        )
+                    )
+                ]
+            )
+
+    comparator.client = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=FakeCompletions())
+    )
+
+    comparison = comparator.compare({"Notion": report})
+
+    assert comparison.unique_pain_points == {"Notion": ["Slow Sync"]}
+    assert "temperature" in calls[0]
+    assert "temperature" not in calls[1]
 
 
 def test_comparator_preserves_exact_product_keys_from_wrapped_json():

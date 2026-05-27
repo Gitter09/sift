@@ -3,6 +3,7 @@ from typing import List, Dict
 from openai import OpenAI
 from src.models.report import ProductReport, ComparisonReport
 from src.config import LLMConfig
+from src.pipeline.llm_client import LLMRequestOptions, create_chat_completion
 from src.pipeline.llm_json import log_parse_debug, parse_json_object
 
 logger = logging.getLogger(__name__)
@@ -86,14 +87,15 @@ class Comparator:
     def _call_llm(self, prompt: str) -> str:
         if self.client is None:
             raise RuntimeError(self._unavailable_reason or "LLM client is unavailable")
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
+        response = create_chat_completion(
+            self.client,
+            self.model,
+            [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
+            LLMRequestOptions(self.temperature, self.max_tokens),
+            logger,
         )
         return (response.choices[0].message.content or "").strip()
 

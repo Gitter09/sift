@@ -13,9 +13,19 @@ from typing import Optional
 from dotenv import load_dotenv, dotenv_values
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt, Confirm
+from rich.rule import Rule
 from rich.text import Text
 
+from src.ui.theme import (
+    AMBER,
+    EMERALD,
+    ICON_DONE,
+    ICON_DOT,
+    TEXT_MUTED,
+    TEXT_PRIMARY,
+    TEXT_SECONDARY,
+    VIOLET,
+)
 console = Console()
 
 # Absolute path to the .env file in the project root (or cwd).
@@ -23,6 +33,8 @@ _ENV_PATH = Path(os.getenv("SIFT_ENV_PATH", Path.cwd() / ".env"))
 
 # Required: the LLM key is mandatory for analysis to work.
 _REQUIRED_KEY = "LLM_API_KEY"
+
+_EXISTING_SENTINEL = "(existing — press Enter to keep)"
 
 # All keys the setup wizard knows about, with their prompt labels and defaults.
 _KEYS = [
@@ -78,99 +90,135 @@ _OPTIONAL_KEYS = [
 
 
 def is_configured() -> bool:
-    """Return True if the required API key is present in the .env file.
-
-    Loads dotenv so os.getenv picks up values from the file, then checks for
-    the required key.
-    """
+    """Return True if the required API key is present in the .env file."""
     load_dotenv(_ENV_PATH)
     value = os.getenv(_REQUIRED_KEY, "").strip()
     return bool(value)
 
 
-def run_setup_wizard() -> None:
-    """Walk the user through interactive API key configuration and save to .env.
-
-    Pre-fills prompts with existing values so re-running the wizard doesn't
-    force the user to re-type everything.
-    """
-    # Load existing values from .env (if any) for pre-filling.
-    existing: dict[str, Optional[str]] = {}
-    if _ENV_PATH.exists():
-        existing = dict(dotenv_values(_ENV_PATH))
-
+def _print_welcome() -> None:
     console.print()
     console.print(
         Panel.fit(
             Text(
-                "Welcome to Sift! Let's configure your API keys.\n"
-                "Press Enter to accept defaults or leave optional fields empty.",
-                style="bold",
+                "Welcome to Sift. Let's configure your API keys.\n"
+                "Press Enter to accept defaults. Press Esc anytime to save or discard and exit.",
+                style=f"bold {TEXT_PRIMARY}",
             ),
-            border_style="white",
+            border_style=VIOLET,
         )
     )
     console.print()
 
+
+def _section_rule(title: str, color: str) -> None:
+    console.print(Rule(f"[bold {color}]{title}[/bold {color}]", style=TEXT_MUTED, align="left"))
+    console.print()
+
+
+def _ask_entry(entry: dict, existing: dict[str, Optional[str]], required_section: bool) -> Optional[str]:
+    """Prompt for a single key. Returns the user's value, or ``None`` if Esc."""
+    from src.ui.menu import read_line_with_escape  # lazy: avoid circular import
+    key = entry["key"]
+    default = existing.get(key) or entry["default"]
+    is_password = entry.get("password", False)
+
+    if is_password and default:
+        # For already-set secrets, show a placeholder default; we'll swap it
+        # back to the real value if the user presses Enter without typing.
+        shown_default = _EXISTING_SENTINEL
+    else:
+        shown_default = default
+
+    if required_section:
+        label = f"  [bold {TEXT_PRIMARY}]{entry['label']}[/bold {TEXT_PRIMARY}]"
+    else:
+        label = f"  [{TEXT_SECONDARY}]{entry['label']}[/{TEXT_SECONDARY}]"
+
+    value = read_line_with_escape(
+        label,
+        default=shown_default,
+        password=is_password,
+        show_default=bool(shown_default),
+    )
+    if value is None:
+        return None
+    if is_password and default and value == _EXISTING_SENTINEL:
+        value = default
+    return value.strip()
+
+
+def _build_entries() -> list[tuple[str, dict]]:
+    """Flatten the prompt list with section markers for resumable iteration."""
+    out: list[tuple[str, dict]] = []
+    for e in _KEYS:
+        out.append(("required", e))
+    for e in _OPTIONAL_KEYS:
+        out.append(("optional", e))
+    return out
+
+
+def run_setup_wizard() -> None:
+    """Walk the user through interactive API key configuration and save to .env.
+
+    Esc at any prompt opens a Save/Discard/Cancel dialog.
+    """
+    existing: dict[str, Optional[str]] = {}
+    if _ENV_PATH.exists():
+        existing = dict(dotenv_values(_ENV_PATH))
+
+    _print_welcome()
+
     new_values: dict[str, str] = {}
+    entries = _build_entries()
 
-    # --- Required keys ---
-    console.print(
-        Panel("[bold]Required[/bold]", border_style="yellow", padding=(0, 1))
-    )
-    console.print()
-    for entry in _KEYS:
-        key = entry["key"]
-        default = existing.get(key) or entry["default"]
-        prompt_kwargs = {
-            "default": default,
-            "show_default": bool(default),
-        }
-        if entry["password"] and not default:
-            prompt_kwargs["password"] = True
-        elif entry["password"] and default:
-            # When there's an existing value, show it masked as placeholder
-            prompt_kwargs["default"] = "(existing — press Enter to keep)"
-            prompt_kwargs["show_default"] = True
-            prompt_kwargs["password"] = True
+    i = 0
+    last_section: Optional[str] = None
+    while i < len(entries):
+        section, entry = entries[i]
+        if section != last_section:
+            if section == "required":
+                _section_rule("REQUIRED", VIOLET)
+            else:
+                console.print()
+                _section_rule("OPTIONAL", TEXT_SECONDARY)
+            last_section = section
 
-        value = Prompt.ask(f"  [bold]{entry['label']}[/bold]", **prompt_kwargs)
+        value = _ask_entry(entry, existing, required_section=(section == "required"))
 
-        # If user accepted "(existing — press Enter to keep)", use the real value.
-        if entry["password"] and default and value == "(existing — press Enter to keep)":
-            value = default
+        if value is None:
+            # Esc pressed — ask what to do.
+            from src.ui.menu import prompt_exit_choice  # lazy: avoid circular import
+            choice = prompt_exit_choice()
+            if choice == "save":
+                console.print()
+                _save_env(new_values, existing)
+                return
+            if choice == "discard":
+                console.print()
+                console.print(
+                    Panel(
+                        f"[bold {AMBER}]{ICON_DOT} Changes discarded.[/bold {AMBER}]\n"
+                        f"[{TEXT_SECONDARY}]Your .env was not modified.[/{TEXT_SECONDARY}]",
+                        border_style=AMBER,
+                    )
+                )
+                console.print()
+                return
+            # Cancel — re-render section header for context, then re-prompt
+            # this same entry.
+            console.print()
+            if section == "required":
+                _section_rule("REQUIRED", VIOLET)
+            else:
+                _section_rule("OPTIONAL", TEXT_SECONDARY)
+            last_section = section
+            continue
 
-        if value.strip() or entry["required"]:
-            new_values[key] = value.strip()
+        if value or entry.get("required"):
+            new_values[entry["key"]] = value
 
-    console.print()
-
-    # --- Optional keys ---
-    console.print(
-        Panel("[bold]Optional[/bold]", border_style="dim", padding=(0, 1))
-    )
-    console.print()
-    for entry in _OPTIONAL_KEYS:
-        key = entry["key"]
-        default = existing.get(key) or entry["default"]
-        prompt_kwargs = {
-            "default": default if default else "",
-            "show_default": bool(default),
-        }
-        if entry["password"] and not default:
-            prompt_kwargs["password"] = True
-        elif entry["password"] and default:
-            prompt_kwargs["default"] = "(existing — press Enter to keep)"
-            prompt_kwargs["show_default"] = True
-            prompt_kwargs["password"] = True
-
-        value = Prompt.ask(f"  [dim]{entry['label']}[/dim]", **prompt_kwargs)
-
-        if entry["password"] and default and value == "(existing — press Enter to keep)":
-            value = default
-
-        if value.strip():
-            new_values[key] = value.strip()
+        i += 1
 
     console.print()
     _save_env(new_values, existing)
@@ -186,13 +234,11 @@ def _save_env(new_values: dict[str, str], existing: dict[str, Optional[str]]) ->
     merged = {k: v for k, v in existing.items() if v is not None}
     merged.update(new_values)
 
-    # Determine the set of keys we manage (required + optional).
     managed_keys = {e["key"] for e in _KEYS} | {e["key"] for e in _OPTIONAL_KEYS}
 
     lines: list[str] = []
     seen_managed = set()
 
-    # Preserve existing lines, updating managed keys in-place.
     if _ENV_PATH.exists():
         with open(_ENV_PATH, "r") as f:
             for line in f:
@@ -206,11 +252,9 @@ def _save_env(new_values: dict[str, str], existing: dict[str, Optional[str]]) ->
                     if raw_key not in seen_managed:
                         lines.append(f"{raw_key}={merged.get(raw_key, '')}")
                         seen_managed.add(raw_key)
-                    # Skip duplicate or old entries for this key.
                 else:
                     lines.append(line.rstrip("\n"))
 
-    # Append any managed keys not yet written.
     for key in merged:
         if key in managed_keys and key not in seen_managed:
             lines.append(f"{key}={merged[key]}")
@@ -221,8 +265,8 @@ def _save_env(new_values: dict[str, str], existing: dict[str, Optional[str]]) ->
 
     console.print(
         Panel(
-            f"[green bold]\u2713 Configuration saved to {_ENV_PATH}[/green bold]",
-            border_style="green",
+            f"[bold {EMERALD}]{ICON_DONE} Configuration saved to {_ENV_PATH}[/bold {EMERALD}]",
+            border_style=EMERALD,
         )
     )
     console.print()

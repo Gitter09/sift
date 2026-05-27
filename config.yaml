@@ -184,8 +184,10 @@ llm:
   temperature: 0.3
   # deepseek-v4-pro is a reasoning model: most output tokens are consumed by
   # the chain of thought before any visible content. 2000 was too tight; the
-  # model burned the whole budget thinking and returned empty content.
-  max_tokens: 32000
+  # model burned the whole budget thinking and returned empty content. Some
+  # OpenAI-compatible gateways reject very high caps with HTTP 400, so keep
+  # this conservative and let the LLM client adapt on provider errors.
+  max_tokens: 8000
 
 logging:
   level: "ERROR"

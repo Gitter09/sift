@@ -31,26 +31,48 @@ from src.pipeline.report_generator import (
     generate_comparison_markdown,
 )
 from src.config import Settings
+from src.ui.theme import (
+    ACCENT_COLOR,
+    AMBER,
+    AURORA_STOPS,
+    BORDER_DIM,
+    CYAN,
+    EMERALD,
+    ICON_BULLET,
+    ICON_DIAMOND,
+    ICON_DONE,
+    ICON_DOT,
+    ICON_SELECT,
+    ICON_WARN,
+    ROSE,
+    SEVERITY_COLORS,
+    SEVERITY_DOTS,
+    SOURCE_COLOR,
+    TEXT_MUTED,
+    TEXT_PRIMARY,
+    TEXT_SECONDARY,
+    VIOLET,
+    VIOLET_DIM,
+)
 
 console = Console()
 
-# --- Style constants ---
-SEVERITY_COLORS = {"high": "red", "medium": "yellow", "low": "green"}
-SEVERITY_ICONS = {"high": "🔴", "medium": "🟡", "low": "🟢"}
-SOURCE_COLOR = "white"
-
-# --- Aurora theme ---
-# 7 stops, one per shape row — violet top fading to deep purple bottom
-_AURORA_STOPS = [
-    "#A78BFA",  # row 0  violet-400 (top)
-    "#9B79F7",  # row 1
-    "#8F67F4",  # row 2
-    "#8355F1",  # row 3
-    "#7743EE",  # row 4
-    "#6B31EB",  # row 5
-    "#5F1FE8",  # row 6  deep violet-purple (bottom)
+# Backward-compatible exports (modules import these from display)
+__all__ = [
+    "ACCENT_COLOR", "SEVERITY_COLORS", "SEVERITY_DOTS", "SOURCE_COLOR",
+    "VERSION", "console",
+    "print_banner", "print_large_banner", "print_config_summary",
+    "print_cluster_summary", "print_comparison_summary",
+    "print_report_preview", "print_comparison_preview",
+    "print_done_banner", "print_skip_warning", "print_scraper_warning",
+    "print_unknown_sources", "print_no_scraper", "print_unconfigured_sources",
+    "print_dedup_summary", "print_relevance_summary", "print_no_reports",
+    "print_g2_proxy_warning", "print_no_feedback_guidance",
+    "ScrapeProgress", "PipelineProgress",
 ]
-ACCENT_COLOR = "#8B5CF6"   # mid-violet — used for borders, tagline, menu hints
+
+# Keep legacy SEVERITY_ICONS for anything that still references it
+SEVERITY_ICONS = SEVERITY_DOTS
 
 SIFT_BANNER = (
     "███████╗    ██╗    ███████╗    ████████╗\n"
@@ -64,9 +86,7 @@ SIFT_BANNER = (
 )
 
 _PIXEL_MAPS = {
-    # S: top bar anchors left edge, bottom bar anchors right edge — proper S flow
     'S': ['1111110', '1100000', '1100000', '0111110', '0000011', '0000011', '0111111'],
-    # I/T: 3-pixel-wide stem (pixels 2-4 in 7-wide grid) for equal gaps left & right
     'I': ['1111111', '0011100', '0011100', '0011100', '0011100', '0011100', '1111111'],
     'F': ['1111111', '1100000', '1100000', '1111100', '1100000', '1100000', '1100000'],
     'T': ['1111111', '0011100', '0011100', '0011100', '0011100', '0011100', '0011100'],
@@ -82,7 +102,7 @@ def _render_sift_pixels(scale_x: int = 3, scale_y: int = 2, gap: int = 3) -> lis
             if i > 0:
                 line += ' ' * gap
             for pixel in _PIXEL_MAPS[ch][row_idx]:
-                line += '█' * scale_x if pixel == '1' else ' ' * scale_x
+                line += '\u2588' * scale_x if pixel == '1' else ' ' * scale_x
         for _ in range(scale_y):
             rows.append(line)
     return rows
@@ -107,16 +127,16 @@ def _git_info() -> str:
         commit = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
         ).decode().strip()
-        return f"{branch} · {commit}" if branch else commit
+        return f"{branch} {ICON_DOT} {commit}" if branch else commit
     except Exception:
         return ""
 
 
 def _severity_text(severity: str | None) -> Text:
     sev = (severity or "medium").lower()
-    color = SEVERITY_COLORS.get(sev, "white")
-    icon = SEVERITY_ICONS.get(sev, "⚪")
-    return Text(f"{icon} {sev}", style=color)
+    color = SEVERITY_COLORS.get(sev, TEXT_PRIMARY)
+    dot = SEVERITY_DOTS.get(sev, SEVERITY_DOTS["medium"])
+    return Text.from_markup(f"{dot} {sev}", style=color)
 
 
 # ---------------------------------------------------------------------------
@@ -134,12 +154,12 @@ def print_banner() -> None:
             console.print(line, justify="center", style="dim")
         else:
             console.print()
-    console.print(f"v{_get_version()}", justify="center", style="dim")
+    console.print(f"v{_get_version()}", justify="center", style=f"dim {TEXT_SECONDARY}")
     console.print()
 
 
 def print_large_banner() -> None:
-    # Pick scale based on terminal width: 3×2 needs ~96 cols, 2×2 needs ~68
+    # Pick scale based on terminal width: 3x2 needs ~96 cols, 2x2 needs ~68
     if console.width >= 96:
         scale_y = 2
         lines = _render_sift_pixels(scale_x=3, scale_y=scale_y, gap=3)
@@ -150,15 +170,25 @@ def print_large_banner() -> None:
         scale_y = 1
         lines = _render_sift_pixels(scale_x=1, scale_y=scale_y, gap=2)
 
-    # Each aurora stop repeats scale_y times (one stop per shape row)
-    colors = [c for c in _AURORA_STOPS for _ in range(scale_y)]
+    colors = [c for c in AURORA_STOPS for _ in range(scale_y)]
 
+    # Subtle glow aura — faint violet lines above and below the wordmark
     console.print()
+    # Pick the first column width to size the glow line
+    sample_line = lines[0]
+    glow_len = len(sample_line.rstrip()) if sample_line else 40
+    glow = f"[dim {VIOLET_DIM}]{'─' * min(glow_len, 80)}[/dim {VIOLET_DIM}]"
+    console.print(glow, justify="center")
+    console.print()
+
     for line, color in zip(lines, colors):
         console.print(f"[bold {color}]{line}[/bold {color}]", justify="center")
+
     console.print()
-    console.print(f"[{ACCENT_COLOR}]◈  Scrape · Cluster · Analyze  ◈[/{ACCENT_COLOR}]", justify="center")
-    console.print(f"[dim {ACCENT_COLOR}]v{VERSION}[/dim {ACCENT_COLOR}]", justify="center")
+    console.print(glow, justify="center")
+    console.print()
+    console.print(f"[{VIOLET}]{ICON_DIAMOND}  Scrape {ICON_DOT} Cluster {ICON_DOT} Analyze  {ICON_DIAMOND}[/{VIOLET}]", justify="center")
+    console.print(f"[dim {VIOLET}]v{VERSION}[/dim {VIOLET}]", justify="center")
     console.print()
 
 
@@ -169,11 +199,11 @@ def print_config_summary(settings: Settings, sources: list[str]) -> None:
 
     content = (
         f"[bold]Sources:[/bold] {source_list}\n"
-        f"[bold]LLM:[/bold] [yellow]{settings.llm.model}[/yellow]  "
-        f"[bold]Embedding:[/bold] [yellow]{settings.clustering.embedding_model}[/yellow]\n"
-        f"[bold]Disabled:[/bold] [dim]{disabled_str}[/dim]"
+        f"[bold]LLM:[/bold] [{CYAN}]{settings.llm.model}[/{CYAN}]  "
+        f"[bold]Embedding:[/bold] [{CYAN}]{settings.clustering.embedding_model}[/{CYAN}]\n"
+        f"[bold]Disabled:[/bold] [{TEXT_SECONDARY}]{disabled_str}[/{TEXT_SECONDARY}]"
     )
-    console.print(Panel(content, title="Configuration", border_style="white"))
+    console.print(Panel(content, title="Configuration", border_style=VIOLET))
     console.print()
 
 
@@ -188,9 +218,9 @@ class ScrapeProgress:
     def __init__(self, total: int | None = None):
         self._total = total
         self._progress = Progress(
-            SpinnerColumn(),
+            SpinnerColumn(style=CYAN),
             TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
+            BarColumn(bar_width=None, style=BORDER_DIM, complete_style=CYAN),
             MofNCompleteColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeElapsedColumn(),
@@ -201,7 +231,7 @@ class ScrapeProgress:
     def __enter__(self) -> "ScrapeProgress":
         self._progress.start()
         self._task_id = self._progress.add_task(
-            f"[{SOURCE_COLOR}]Scraping[/{SOURCE_COLOR}]",
+            f"[{VIOLET}]Scraping[/{VIOLET}]",
             total=self._total,
         )
         return self
@@ -213,7 +243,7 @@ class ScrapeProgress:
         if self._task_id is not None:
             self._progress.update(
                 self._task_id,
-                description=f"[{SOURCE_COLOR}]{description}[/{SOURCE_COLOR}]",
+                description=f"[{VIOLET}]{description}[/{VIOLET}]",
             )
 
     def advance(self, amount: int = 1) -> None:
@@ -227,9 +257,9 @@ class PipelineProgress:
     def __init__(self, total_stages: int = 4):
         self._total = total_stages
         self._progress = Progress(
-            SpinnerColumn(),
+            SpinnerColumn(style=CYAN),
             TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
+            BarColumn(bar_width=None, style=VIOLET_DIM, complete_style=CYAN),
             MofNCompleteColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
             TimeElapsedColumn(),
@@ -240,7 +270,7 @@ class PipelineProgress:
     def __enter__(self) -> "PipelineProgress":
         self._progress.start()
         self._task_id = self._progress.add_task(
-            "[yellow]Pipeline[/yellow]",
+            f"[{CYAN}]Pipeline[/{CYAN}]",
             total=self._total,
         )
         return self
@@ -252,7 +282,7 @@ class PipelineProgress:
         if self._task_id is not None:
             self._progress.update(
                 self._task_id,
-                description=f"[yellow]{name}[/yellow]",
+                description=f"[{CYAN}]{name}[/{CYAN}]",
             )
 
     def set_total(self, total: int) -> None:
@@ -276,17 +306,17 @@ def print_cluster_summary(report: ProductReport) -> None:
         return
 
     table = Table(
-        title=f"Clusters — [bold]{report.product}[/bold] ({report.total_feedback_count} items)",
+        title=f"Clusters {ICON_DOT} [bold {TEXT_PRIMARY}]{report.product}[/bold {TEXT_PRIMARY}] ({report.total_feedback_count} items)",
         box=box.ROUNDED,
-        border_style="white",
+        border_style=VIOLET_DIM,
         show_header=True,
-        header_style="bold",
-        title_style="bold",
+        header_style=f"bold {VIOLET}",
+        title_style=f"bold {TEXT_PRIMARY}",
     )
-    table.add_column("#", style="dim", width=3, justify="right")
-    table.add_column("Severity", width=10)
-    table.add_column("Label", style="bold")
-    table.add_column("Count", justify="right", width=6)
+    table.add_column("#", style=f"dim {TEXT_MUTED}", width=3, justify="right")
+    table.add_column("Severity", width=12)
+    table.add_column("Label", style=f"bold {TEXT_PRIMARY}")
+    table.add_column("Count", justify="right", width=6, style=TEXT_SECONDARY)
     table.add_column("Summary", max_width=80)
 
     severity_order = {"high": 0, "medium": 1, "low": 2}
@@ -305,41 +335,52 @@ def print_cluster_summary(report: ProductReport) -> None:
         )
 
     console.print(table)
+    console.print(Rule(style=BORDER_DIM))
     console.print()
 
 
 def print_comparison_summary(comparison: ComparisonReport) -> None:
     """Print a multi-product comparison summary with panels."""
-    products_str = ", ".join(f"[bold]{p}[/bold]" for p in comparison.products)
+    products_str = "  ".join(
+        f"[{CYAN}]{ICON_DOT}[/{CYAN}] [bold {TEXT_PRIMARY}]{p}[/bold {TEXT_PRIMARY}]"
+        for p in comparison.products
+    )
 
-    console.print(Rule("Competitive Comparison", style="dim"))
-    console.print(f"Products: {products_str}")
+    console.print(Rule(style=BORDER_DIM))
+    console.print(f"[bold {TEXT_SECONDARY}]PRODUCTS[/bold {TEXT_SECONDARY}]")
+    console.print(products_str)
     console.print()
 
     if comparison.competitive_insights:
         console.print(
             Panel(
                 comparison.competitive_insights,
-                title="Competitive Insights",
-                border_style="yellow",
+                title=f"[{AMBER}]Competitive Insights[/{AMBER}]",
+                border_style=AMBER,
             )
         )
         console.print()
 
     if comparison.shared_pain_points:
-        shared = "\n".join(f"• {p}" for p in comparison.shared_pain_points)
-        console.print(Panel(shared, title="Shared Pain Points", border_style="red"))
+        shared = "\n".join(f"  {ICON_SELECT} {p}" for p in comparison.shared_pain_points)
+        console.print(
+            Panel(
+                shared,
+                title=f"[{ROSE}]Shared Pain Points[/{ROSE}]",
+                border_style=ROSE,
+            )
+        )
         console.print()
 
     if comparison.unique_pain_points:
         for product, points in comparison.unique_pain_points.items():
             if points:
-                items = "\n".join(f"• {p}" for p in points)
+                items = "\n".join(f"  {ICON_SELECT} {p}" for p in points)
                 console.print(
                     Panel(
                         items,
-                        title=f"Unique to [bold]{product}[/bold]",
-                        border_style="green",
+                        title=f"[{EMERALD}]Unique to {product}[/{EMERALD}]",
+                        border_style=EMERALD,
                     )
                 )
         console.print()
@@ -353,7 +394,7 @@ def print_comparison_summary(comparison: ComparisonReport) -> None:
 def print_report_preview(report: ProductReport) -> None:
     """Render the markdown report inline using Rich's Markdown renderer."""
     md = generate_markdown_report(report)
-    console.print(Rule(f"Report Preview — {report.product}", style="dim"))
+    console.print(Rule(f"Report Preview {ICON_DOT} {report.product}", style=BORDER_DIM))
     console.print(Markdown(md))
     console.print()
 
@@ -361,19 +402,19 @@ def print_report_preview(report: ProductReport) -> None:
 def print_comparison_preview(comparison: ComparisonReport) -> None:
     """Render the comparison markdown inline."""
     md = generate_comparison_markdown(comparison)
-    console.print(Rule("Comparison Report Preview", style="dim"))
+    console.print(Rule(f"Comparison Report Preview", style=BORDER_DIM))
     console.print(Markdown(md))
     console.print()
 
 
 def print_done_banner(output_dir: str, files: list[str]) -> None:
     """Print a success banner listing saved report files."""
-    file_list = "\n".join(f"  [dim]→[/dim] {f}" for f in files)
+    file_list = "\n".join(f"  [{TEXT_MUTED}]{ICON_BULLET}[/{TEXT_MUTED}] {f}" for f in files)
     console.print(
         Panel(
             file_list,
-            border_style="green",
-            title="[bold green]Done ✓[/bold green]",
+            border_style=VIOLET,
+            title=f"[bold {EMERALD}]{ICON_DONE} Done[/bold {EMERALD}]",
             subtitle=f"[dim]{output_dir}/[/dim]",
         )
     )
@@ -386,55 +427,76 @@ def print_done_banner(output_dir: str, files: list[str]) -> None:
 
 def print_skip_warning(product: str, count: int) -> None:
     console.print(
-        f"[yellow]⚠ Skipping '{product}' — only {count} items "
-        f"(need ≥ 3 for clustering).[/yellow]"
+        Panel(
+            f"Skipping [{TEXT_PRIMARY}]{product}[/{TEXT_PRIMARY}] {ICON_WARN} only {count} items "
+            f"(need \u2265 3 for clustering).",
+            border_style=AMBER,
+            title=f"[{AMBER}]Skipped[/{AMBER}]",
+        )
     )
 
 
 def print_scraper_warning(source: str, product: str) -> None:
     console.print(
-        f"[yellow]⚠ {source} scraper failed for '{product}'. "
-        f"Check logs for details.[/yellow]"
+        Panel(
+            f"[{TEXT_PRIMARY}]{source}[/{TEXT_PRIMARY}] scraper failed for "
+            f"[{TEXT_PRIMARY}]{product}[/{TEXT_PRIMARY}]. Check logs for details.",
+            border_style=ROSE,
+            title=f"[{ROSE}]Scraper Error[/{ROSE}]",
+        )
     )
 
 
 def print_unknown_sources(unknown: list[str]) -> None:
-    console.print(f"[yellow]Unknown source(s): {', '.join(unknown)}[/yellow]")
+    console.print(
+        f"[{AMBER}]{ICON_WARN} Unknown source(s): {', '.join(unknown)}[/{AMBER}]"
+    )
 
 
 def print_no_scraper(source: str) -> None:
-    console.print(f"[dim]No enabled scraper for '{source}'[/dim]")
+    console.print(f"[{TEXT_MUTED}]No enabled scraper for '{source}'[/{TEXT_MUTED}]")
 
 
 def print_unconfigured_sources(sources: list[str]) -> None:
     formatted = ", ".join(sources)
     console.print(
-        "[dim]Skipping unconfigured default source"
-        f"{'s' if len(sources) != 1 else ''}: {formatted}[/dim]"
+        f"[{TEXT_MUTED}]Skipping unconfigured default source"
+        f"{'s' if len(sources) != 1 else ''}: {formatted}[/{TEXT_MUTED}]"
     )
 
 
 def print_dedup_summary(total: int, duplicates: int, kept: int) -> None:
-    dup_msg = f" (filtered {duplicates} duplicate{'s' if duplicates != 1 else ''})" if duplicates else ""
-    console.print(f"[dim]Collected {kept} unique items from {total} total{dup_msg}.[/dim]")
+    dup_msg = (
+        f" [{ICON_DOT}] {duplicates} duplicate{'s' if duplicates != 1 else ''} filtered"
+        if duplicates else ""
+    )
+    console.print(
+        f"[{TEXT_SECONDARY}]{kept} unique items from {total} collected{dup_msg}.[/{TEXT_SECONDARY}]"
+    )
 
 
 def print_relevance_summary(total: int, rejected: int, kept: int, relaxed: bool = False) -> None:
     if total == 0:
-        console.print("[dim]No items collected before relevance filtering.[/dim]")
+        console.print(f"[{TEXT_SECONDARY}]No items collected before relevance filtering.[/{TEXT_SECONDARY}]")
         return
-    relaxed_msg = " threshold relaxed" if relaxed else ""
+    relaxed_msg = " (threshold relaxed)" if relaxed else ""
     reject_msg = (
-        f" (rejected {rejected} off-context item{'s' if rejected != 1 else ''}{relaxed_msg})"
+        f" [{ICON_DOT}] {rejected} off-context rejected{relaxed_msg}"
         if rejected or relaxed
         else ""
     )
-    console.print(f"[dim]Kept {kept} context-relevant items from {total} collected{reject_msg}.[/dim]")
+    console.print(
+        f"[{TEXT_SECONDARY}]{kept} context-relevant items from {total} collected{reject_msg}.[/{TEXT_SECONDARY}]"
+    )
 
 
 def print_no_reports() -> None:
     console.print(
-        "[yellow]No reports generated — no product had enough feedback for analysis.[/yellow]"
+        Panel(
+            "No product had enough feedback for analysis (minimum 3 items required).",
+            border_style=AMBER,
+            title=f"[{AMBER}]No Reports Generated[/{AMBER}]",
+        )
     )
 
 
@@ -443,16 +505,19 @@ def print_g2_proxy_warning() -> None:
         Panel(
             "G2 is protected by Cloudflare and cannot be reliably scraped without a paid proxy.\n\n"
             "To enable G2, add a proxy URL to your config or [bold].env[/bold]:\n\n"
-            "  [dim]# config.yaml[/dim]\n"
+            f"  [{TEXT_MUTED}]# config.yaml[/{TEXT_MUTED}]\n"
             "  [bold]g2:[/bold]\n"
-            "  [bold]  proxy_url:[/bold] https://user:pass@proxy.example.com\n\n"
-            "  [dim]# .env[/dim]\n"
-            "  [bold]G2_PROXY_URL[/bold]=https://user:pass@proxy.example.com\n\n"
-            "Compatible services: [bold]ScraperAPI[/bold] · [bold]ZenRows[/bold] · "
-            "[bold]BrightData[/bold] · [bold]Oxylabs[/bold]\n\n"
-            "[dim]G2 will still be attempted but will likely return 0 results without a proxy.[/dim]",
-            title="[yellow]G2 Requires a Paid Proxy[/yellow]",
-            border_style="yellow",
+            "  [bold]  proxy_url:[/bold] ****************************************\n\n"
+            f"  [{TEXT_MUTED}]# .env[/{TEXT_MUTED}]\n"
+            "  [bold]G2_PROXY_URL[/bold]=****************************************\n\n"
+            "Compatible services: [bold]ScraperAPI[/bold] "
+            f"{ICON_DOT} [bold]ZenRows[/bold] "
+            f"{ICON_DOT} [bold]BrightData[/bold] "
+            f"{ICON_DOT} [bold]Oxylabs[/bold]\n\n"
+            f"[{TEXT_SECONDARY}]G2 will still be attempted but will likely return 0 results "
+            f"without a proxy.[/{TEXT_SECONDARY}]",
+            title=f"[{AMBER}]G2 Requires a Paid Proxy[/{AMBER}]",
+            border_style=AMBER,
         )
     )
 
@@ -462,16 +527,17 @@ def print_no_feedback_guidance(product: str, sources: list[str]) -> None:
     console.print(
         Panel(
             "No feedback items were collected.\n\n"
-            f"Product: [bold]{product}[/bold]\n"
-            f"Tried: [bold]{source_list}[/bold]\n\n"
-            "Add product-specific config for higher-yield sources, for example:\n"
-            "  • app_store.app_ids\n"
-            "  • play_store.package_names\n"
-            "  • github_issues.repos\n"
-            "  • youtube.video_ids plus YOUTUBE_API_KEY\n"
-            "  • support_forums.search_urls or changelogs.urls\n\n"
-            "Use [bold]--verbose[/bold] to see blocked/network source diagnostics.",
-            title="No Feedback Collected",
-            border_style="yellow",
+            f"Product: [bold {TEXT_PRIMARY}]{product}[/bold {TEXT_PRIMARY}]\n"
+            f"Tried: [bold {TEXT_PRIMARY}]{source_list}[/bold {TEXT_PRIMARY}]\n\n"
+            "Add product-specific config for higher-yield sources:\n"
+            "  \u2022 app_store.app_ids\n"
+            "  \u2022 play_store.package_names\n"
+            "  \u2022 github_issues.repos\n"
+            "  \u2022 youtube.video_ids plus YOUTUBE_API_KEY\n"
+            "  \u2022 support_forums.search_urls or changelogs.urls\n\n"
+            f"[{TEXT_SECONDARY}]Use [{TEXT_PRIMARY}]--verbose[/{TEXT_PRIMARY}] "
+            f"to see blocked/network source diagnostics.[/{TEXT_SECONDARY}]",
+            title=f"[{AMBER}]No Feedback Collected[/{AMBER}]",
+            border_style=AMBER,
         )
     )
