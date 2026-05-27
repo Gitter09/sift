@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [
-    { name = "Harshit Singh" },
+    { name = "Harshit Singh", email = "harshit.singh.work@outlook.com" },
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -40,9 +40,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/harshitsingh/sift"
-Issues = "https://github.com/harshitsingh/sift/issues"
-Changelog = "https://github.com/harshitsingh/sift/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/Gitter09/sift"
+Repository = "https://github.com/Gitter09/sift"
+Issues = "https://github.com/Gitter09/sift/issues"
+Changelog = "https://github.com/Gitter09/sift/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
