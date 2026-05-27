@@ -2,8 +2,8 @@ import logging
 import numpy as np
 from typing import List
 from sentence_transformers import SentenceTransformer
-from src.models.feedback import FeedbackItem
-from src.config import ClusteringConfig
+from sift.models.feedback import FeedbackItem
+from sift.config import ClusteringConfig
 
 logger = logging.getLogger(__name__)
 

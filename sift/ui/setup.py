@@ -16,7 +16,8 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.text import Text
 
-from src.ui.theme import (
+from sift.config_defaults import generate_default_config
+from sift.ui.theme import (
     AMBER,
     EMERALD,
     ICON_DONE,
@@ -118,7 +119,7 @@ def _section_rule(title: str, color: str) -> None:
 
 def _ask_entry(entry: dict, existing: dict[str, Optional[str]], required_section: bool) -> Optional[str]:
     """Prompt for a single key. Returns the user's value, or ``None`` if Esc."""
-    from src.ui.menu import read_line_with_escape  # lazy: avoid circular import
+    from sift.ui.menu import read_line_with_escape  # lazy: avoid circular import
     key = entry["key"]
     default = existing.get(key) or entry["default"]
     is_password = entry.get("password", False)
@@ -188,7 +189,7 @@ def run_setup_wizard() -> None:
 
         if value is None:
             # Esc pressed — ask what to do.
-            from src.ui.menu import prompt_exit_choice  # lazy: avoid circular import
+            from sift.ui.menu import prompt_exit_choice  # lazy: avoid circular import
             choice = prompt_exit_choice()
             if choice == "save":
                 console.print()
@@ -263,10 +264,23 @@ def _save_env(new_values: dict[str, str], existing: dict[str, Optional[str]]) ->
     with open(_ENV_PATH, "w") as f:
         f.write("\n".join(lines) + "\n")
 
-    console.print(
-        Panel(
-            f"[bold {EMERALD}]{ICON_DONE} Configuration saved to {_ENV_PATH}[/bold {EMERALD}]",
-            border_style=EMERALD,
+    # Also generate a default config.yaml if one doesn't exist yet.
+    _CONFIG_PATH = os.getenv("SIFT_CONFIG_PATH", "config.yaml")
+    created_config = generate_default_config(_CONFIG_PATH)
+
+    if created_config:
+        console.print(
+            Panel(
+                f"[bold {EMERALD}]{ICON_DONE} Configuration saved to {_ENV_PATH}[/bold {EMERALD}]\n"
+                f"[bold {EMERALD}]{ICON_DONE} Default config.yaml created at {_CONFIG_PATH}[/bold {EMERALD}]",
+                border_style=EMERALD,
+            )
         )
-    )
+    else:
+        console.print(
+            Panel(
+                f"[bold {EMERALD}]{ICON_DONE} Configuration saved to {_ENV_PATH}[/bold {EMERALD}]",
+                border_style=EMERALD,
+            )
+        )
     console.print()

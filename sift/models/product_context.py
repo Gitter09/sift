@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Iterable
 
-from src.config import ProductProfileConfig, Settings
+from sift.config import ProductProfileConfig, Settings
 
 
 @dataclass(frozen=True)

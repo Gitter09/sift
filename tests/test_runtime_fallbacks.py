@@ -6,14 +6,14 @@ import types
 import httpx
 from openai import BadRequestError
 
-from src.config import LLMConfig
-from src.models.cluster import ClusterResult
-from src.models.feedback import FeedbackItem
-from src.models.report import ProductReport
-from src.pipeline.analyzer import Analyzer
-from src.pipeline.comparator import Comparator
-from src.pipeline.http_client import BrowserFetcher, HttpResponse
-from src.pipeline.rate_limiter import RateLimiter
+from sift.config import LLMConfig
+from sift.models.cluster import ClusterResult
+from sift.models.feedback import FeedbackItem
+from sift.models.report import ProductReport
+from sift.pipeline.analyzer import Analyzer
+from sift.pipeline.comparator import Comparator
+from sift.pipeline.http_client import BrowserFetcher, HttpResponse
+from sift.pipeline.rate_limiter import RateLimiter
 
 
 def _cluster(cluster_id: int = 0) -> ClusterResult:
@@ -36,7 +36,7 @@ def test_analyzer_missing_key_uses_fallback_without_traceback(caplog):
     analyzer = Analyzer(LLMConfig(api_key=""))
     cluster = _cluster(7)
 
-    with caplog.at_level(logging.WARNING, logger="src.pipeline.analyzer"):
+    with caplog.at_level(logging.WARNING, logger="sift.pipeline.analyzer"):
         analyzed = analyzer.analyze_cluster(cluster)
         insights = analyzer.generate_overall_insights("Notion", [analyzed])
 
@@ -55,7 +55,7 @@ def test_analyzer_llm_failure_uses_warning_not_exception_log(caplog):
 
     analyzer._call_llm = fail_call
 
-    with caplog.at_level(logging.WARNING, logger="src.pipeline.analyzer"):
+    with caplog.at_level(logging.WARNING, logger="sift.pipeline.analyzer"):
         analyzed = analyzer.analyze_cluster(_cluster())
 
     assert analyzed.label == "Cluster 0"
@@ -200,7 +200,7 @@ def test_analyzer_overall_prompt_formats_before_llm_fallback(caplog):
 
     analyzer._call_llm = fail_call
 
-    with caplog.at_level(logging.WARNING, logger="src.pipeline.analyzer"):
+    with caplog.at_level(logging.WARNING, logger="sift.pipeline.analyzer"):
         insights = analyzer.generate_overall_insights("Notion", [_cluster()])
 
     assert "LLM call failed" in insights["overall_insights"]
@@ -215,7 +215,7 @@ def test_comparator_missing_key_uses_fallback_without_traceback(caplog):
         clusters=[_cluster()],
     )
 
-    with caplog.at_level(logging.WARNING, logger="src.pipeline.comparator"):
+    with caplog.at_level(logging.WARNING, logger="sift.pipeline.comparator"):
         comparison = comparator.compare({"Notion": report})
 
     assert comparison.unique_pain_points == {"Notion": []}
@@ -238,7 +238,7 @@ def test_comparator_prompt_formats_before_llm_fallback(caplog):
 
     comparator._call_llm = fail_call
 
-    with caplog.at_level(logging.WARNING, logger="src.pipeline.comparator"):
+    with caplog.at_level(logging.WARNING, logger="sift.pipeline.comparator"):
         comparison = comparator.compare({"Notion": report})
 
     assert "LLM call failed" in comparison.competitive_insights
@@ -335,7 +335,7 @@ def test_comparator_invalid_response_falls_back_without_traceback(caplog):
 
     comparator._call_llm = fail_repair
 
-    with caplog.at_level(logging.WARNING, logger="src.pipeline.comparator"):
+    with caplog.at_level(logging.WARNING, logger="sift.pipeline.comparator"):
         comparison = comparator.compare({"Notion": report})
 
     assert "LLM call failed" in comparison.competitive_insights

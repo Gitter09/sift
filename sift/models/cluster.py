@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
-from src.models.feedback import FeedbackItem
+from sift.models.feedback import FeedbackItem
 
 
 @dataclass

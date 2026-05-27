@@ -5,14 +5,14 @@ Contains display helpers (``display.py``), the first-run setup wizard
 tokens (``theme.py``).
 """
 
-from src.ui.display import (
+from sift.ui.display import (
     console,
     print_banner,
     print_large_banner,
 )
-from src.ui.setup import is_configured, run_setup_wizard
-from src.ui.menu import run_main_menu
-from src.ui.theme import (
+from sift.ui.setup import is_configured, run_setup_wizard
+from sift.ui.menu import run_main_menu
+from sift.ui.theme import (
     ACCENT_COLOR,
     AMBER,
     CYAN,

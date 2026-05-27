@@ -1,14 +1,14 @@
-from src.config import (
+from sift.config import (
     AppStoreConfig,
     GitHubIssuesConfig,
     RedditConfig,
     G2Config,
     SourcesConfig,
 )
-from src.scrapers.reddit import RedditScraper
-from src.scrapers.g2 import G2Scraper
-from src.scrapers.factory import default_sources, get_scraper, get_all_scrapers
-from src.config import Settings
+from sift.scrapers.reddit import RedditScraper
+from sift.scrapers.g2 import G2Scraper
+from sift.scrapers.factory import default_sources, get_scraper, get_all_scrapers
+from sift.config import Settings
 
 
 def test_reddit_scraper_source_name():

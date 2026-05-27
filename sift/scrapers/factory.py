@@ -1,10 +1,10 @@
 import logging
 from typing import List, Optional
-from src.scrapers.base import BaseScraper
-from src.scrapers.reddit import RedditScraper
-from src.scrapers.g2 import G2Scraper
-from src.config import Settings
-from src.scrapers.simple_sources import (
+from sift.scrapers.base import BaseScraper
+from sift.scrapers.reddit import RedditScraper
+from sift.scrapers.g2 import G2Scraper
+from sift.config import Settings
+from sift.scrapers.simple_sources import (
     AppStoreScraper,
     ChangelogScraper,
     DevToScraper,
@@ -51,7 +51,7 @@ def get_scraper(source: str, settings: Settings) -> Optional[BaseScraper]:
         return RedditScraper(settings.reddit)
     elif source == "g2":
         if not settings.g2.proxy_url and not _g2_proxy_warning_shown:
-            from src.ui.display import print_g2_proxy_warning
+            from sift.ui.display import print_g2_proxy_warning
             print_g2_proxy_warning()
             _g2_proxy_warning_shown = True
         return G2Scraper(settings.g2)

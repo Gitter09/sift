@@ -1,6 +1,6 @@
 import os
 
-from src.pipeline.numba_cache import ensure_numba_cache_dir
+from sift.pipeline.numba_cache import ensure_numba_cache_dir
 
 
 def test_ensure_numba_cache_dir_sets_writable_default(monkeypatch):

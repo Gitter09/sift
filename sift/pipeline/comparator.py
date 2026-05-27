@@ -1,10 +1,10 @@
 import logging
 from typing import List, Dict
 from openai import OpenAI
-from src.models.report import ProductReport, ComparisonReport
-from src.config import LLMConfig
-from src.pipeline.llm_client import LLMRequestOptions, create_chat_completion
-from src.pipeline.llm_json import log_parse_debug, parse_json_object
+from sift.models.report import ProductReport, ComparisonReport
+from sift.config import LLMConfig
+from sift.pipeline.llm_client import LLMRequestOptions, create_chat_completion
+from sift.pipeline.llm_json import log_parse_debug, parse_json_object
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@ import os
 import logging
 import tempfile
 from unittest.mock import patch
-from src.config import (
+from sift.config import (
     load_settings, setup_logging, Settings,
     RedditConfig, G2Config, ClusteringConfig, LLMConfig, LoggingConfig,
 )
@@ -113,8 +113,8 @@ def test_env_override():
 def test_setup_logging():
     settings = load_settings()
     setup_logging(settings, verbose=False)
-    src_logger = logging.getLogger("src")
-    assert src_logger.level == logging.ERROR
+    sift_logger = logging.getLogger("sift")
+    assert sift_logger.level == logging.ERROR
 
     setup_logging(settings, verbose=True)
-    assert src_logger.level == logging.DEBUG
+    assert sift_logger.level == logging.DEBUG

@@ -1,6 +1,6 @@
 import logging
 from typing import List
-from src.models.feedback import FeedbackItem
+from sift.models.feedback import FeedbackItem
 
 logger = logging.getLogger(__name__)
 

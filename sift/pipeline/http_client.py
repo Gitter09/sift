@@ -19,7 +19,7 @@ from typing import Callable, Optional
 
 from curl_cffi import requests as curl_requests
 
-from src.pipeline.rate_limiter import RateLimiter
+from sift.pipeline.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
 

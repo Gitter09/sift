@@ -1,15 +1,15 @@
 import logging
 import numpy as np
 from typing import List, Dict
-from src.pipeline.numba_cache import ensure_numba_cache_dir
+from sift.pipeline.numba_cache import ensure_numba_cache_dir
 
 ensure_numba_cache_dir()
 
 from umap import UMAP
 import hdbscan
-from src.models.feedback import FeedbackItem
-from src.models.cluster import ClusterResult
-from src.config import ClusteringConfig
+from sift.models.feedback import FeedbackItem
+from sift.models.cluster import ClusterResult
+from sift.config import ClusteringConfig
 
 logger = logging.getLogger(__name__)
 

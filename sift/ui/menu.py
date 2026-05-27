@@ -18,8 +18,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
-from src.ui.display import print_large_banner, VERSION, _git_info
-from src.ui.theme import (
+from sift.ui.display import print_large_banner, VERSION, _git_info
+from sift.ui.theme import (
     ACCENT_COLOR,
     AMBER,
     CYAN,
@@ -33,9 +33,9 @@ from src.ui.theme import (
     TEXT_SECONDARY,
     VIOLET,
 )
-from src.ui.setup import run_setup_wizard
-from src.config import load_settings
-from src.scrapers.factory import AVAILABLE_SOURCES, default_sources
+from sift.ui.setup import run_setup_wizard
+from sift.config import load_settings
+from sift.scrapers.factory import AVAILABLE_SOURCES, default_sources
 
 console = Console()
 
@@ -459,7 +459,7 @@ def _interactive_analyze() -> None:
         return
 
     # Lazy import to avoid circular dependency at module level.
-    from src.cli import run_analyze as _run
+    from sift.cli import run_analyze as _run
 
     _run(
         products=products,
@@ -530,7 +530,7 @@ def _interactive_scrape() -> None:
         _print_returning()
         return
 
-    from src.cli import run_scrape as _run
+    from sift.cli import run_scrape as _run
 
     _run(
         product=product_name.strip(),

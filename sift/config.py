@@ -454,7 +454,7 @@ def setup_logging(settings: Settings, verbose: bool = False) -> None:
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(logging.Formatter(settings.logging.format))
 
-    root_logger = logging.getLogger("src")
+    root_logger = logging.getLogger("sift")
     root_logger.setLevel(level)
     root_logger.handlers.clear()
     root_logger.addHandler(handler)

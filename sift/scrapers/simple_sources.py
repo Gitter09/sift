@@ -10,7 +10,7 @@ from urllib.parse import quote_plus
 from bs4 import BeautifulSoup
 from curl_cffi import requests as curl_requests
 
-from src.config import (
+from sift.config import (
     AppStoreConfig,
     ChangelogsConfig,
     DevToConfig,
@@ -24,14 +24,14 @@ from src.config import (
     SupportForumsConfig,
     YouTubeConfig,
 )
-from src.models.feedback import FeedbackItem
-from src.pipeline.http_client import (
+from sift.models.feedback import FeedbackItem
+from sift.pipeline.http_client import (
     CurlCffiSession,
     BrowserFetcher,
     HttpResponse,
 )
-from src.pipeline.rate_limiter import RateLimiter
-from src.scrapers.base import BaseScraper
+from sift.pipeline.rate_limiter import RateLimiter
+from sift.scrapers.base import BaseScraper
 
 logger = logging.getLogger(__name__)
 

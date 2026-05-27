@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
-from src.models.cluster import ClusterResult
+from sift.models.cluster import ClusterResult
 
 
 @dataclass

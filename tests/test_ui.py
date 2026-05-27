@@ -5,10 +5,10 @@ import io
 import pytest
 from rich.console import Console
 
-from src.models.feedback import FeedbackItem
-from src.models.cluster import ClusterResult
-from src.models.report import ProductReport, ComparisonReport
-from src.config import Settings
+from sift.models.feedback import FeedbackItem
+from sift.models.cluster import ClusterResult
+from sift.models.report import ProductReport, ComparisonReport
+from sift.config import Settings
 
 
 # ---------------------------------------------------------------------------
@@ -27,7 +27,7 @@ def _capture(func, *args, **kwargs) -> str:
     cap = Console(force_terminal=True, file=output, width=120)
 
     # Patch the module-level console temporarily
-    import src.ui.display as display
+    import sift.ui.display as display
     original_console = display.console
     display.console = cap
     try:
@@ -77,13 +77,13 @@ def _make_report(product: str = "TestApp", clusters: list | None = None) -> Prod
 
 
 def test_print_banner():
-    from src.ui.display import print_banner
+    from sift.ui.display import print_banner
     out = _capture(print_banner)
     assert "SIFT" in out or "Product Research" in out
 
 
 def test_print_config_summary():
-    from src.ui.display import print_config_summary
+    from sift.ui.display import print_config_summary
     settings = Settings()
     sources = ["g2", "hacker_news"]
     out = _capture(print_config_summary, settings, sources)
@@ -98,7 +98,7 @@ def test_print_config_summary():
 
 
 def test_print_cluster_summary():
-    from src.ui.display import print_cluster_summary
+    from sift.ui.display import print_cluster_summary
     cluster = _make_cluster(label="Crash on launch", severity="high")
     report = _make_report("AppX", clusters=[cluster])
 
@@ -109,7 +109,7 @@ def test_print_cluster_summary():
 
 
 def test_print_cluster_summary_no_clusters():
-    from src.ui.display import print_cluster_summary
+    from sift.ui.display import print_cluster_summary
     report = _make_report("EmptyApp", clusters=[])
     out = _capture(print_cluster_summary, report)
     assert "No clusters" in out
@@ -117,7 +117,7 @@ def test_print_cluster_summary_no_clusters():
 
 def test_print_cluster_summary_sorts_by_severity():
     """High severity clusters should appear before low severity ones."""
-    from src.ui.display import print_cluster_summary
+    from sift.ui.display import print_cluster_summary
     clusters = [
         _make_cluster(0, "Low issue", severity="low"),
         _make_cluster(1, "High issue", severity="high"),
@@ -132,7 +132,7 @@ def test_print_cluster_summary_sorts_by_severity():
 
 
 def test_print_comparison_summary():
-    from src.ui.display import print_comparison_summary
+    from sift.ui.display import print_comparison_summary
     report1 = _make_report("Notion", clusters=[_make_cluster(label="Slow sync", severity="high")])
     report2 = _make_report("Obsidian", clusters=[_make_cluster(label="Plugin crashes", severity="medium")])
     comp = ComparisonReport(
@@ -154,7 +154,7 @@ def test_print_comparison_summary():
 
 
 def test_scrape_progress_context():
-    from src.ui.display import ScrapeProgress
+    from sift.ui.display import ScrapeProgress
     with ScrapeProgress(total=2) as progress:
         progress.update_desc("Scraping g2 › Notion")
         progress.advance()
@@ -164,7 +164,7 @@ def test_scrape_progress_context():
 
 
 def test_pipeline_progress_context():
-    from src.ui.display import PipelineProgress
+    from sift.ui.display import PipelineProgress
     with PipelineProgress(total_stages=4) as progress:
         progress.stage("Embedding")
         progress.advance()
@@ -183,7 +183,7 @@ def test_pipeline_progress_context():
 
 
 def test_print_skip_warning():
-    from src.ui.display import print_skip_warning
+    from sift.ui.display import print_skip_warning
     out = _capture(print_skip_warning, "TestApp", 2)
     assert "Skipping" in out
     assert "TestApp" in out
@@ -191,7 +191,7 @@ def test_print_skip_warning():
 
 
 def test_print_scraper_warning():
-    from src.ui.display import print_scraper_warning
+    from sift.ui.display import print_scraper_warning
     out = _capture(print_scraper_warning, "g2", "TestApp")
     assert "g2" in out
     assert "TestApp" in out
@@ -199,20 +199,20 @@ def test_print_scraper_warning():
 
 
 def test_print_unknown_sources():
-    from src.ui.display import print_unknown_sources
+    from sift.ui.display import print_unknown_sources
     out = _capture(print_unknown_sources, ["bad_source", "fake"])
     assert "bad_source" in out
     assert "fake" in out
 
 
 def test_print_no_scraper():
-    from src.ui.display import print_no_scraper
+    from sift.ui.display import print_no_scraper
     out = _capture(print_no_scraper, "nonexistent")
     assert "nonexistent" in out
 
 
 def test_print_unconfigured_sources():
-    from src.ui.display import print_unconfigured_sources
+    from sift.ui.display import print_unconfigured_sources
     out = _capture(print_unconfigured_sources, ["app_store", "youtube"])
     assert "app_store" in out
     assert "youtube" in out
@@ -220,7 +220,7 @@ def test_print_unconfigured_sources():
 
 
 def test_print_dedup_summary():
-    from src.ui.display import print_dedup_summary
+    from sift.ui.display import print_dedup_summary
     out = _capture(print_dedup_summary, 100, 5, 95)
     assert "95" in out
     assert "100" in out
@@ -228,14 +228,14 @@ def test_print_dedup_summary():
 
 
 def test_print_dedup_summary_no_duplicates():
-    from src.ui.display import print_dedup_summary
+    from sift.ui.display import print_dedup_summary
     out = _capture(print_dedup_summary, 50, 0, 50)
     # Should not mention "filtered" when duplicates=0
     assert "filtered" not in out
 
 
 def test_print_relevance_summary():
-    from src.ui.display import print_relevance_summary
+    from sift.ui.display import print_relevance_summary
     out = _capture(print_relevance_summary, 20, 4, 16)
     assert "16" in out
     assert "20" in out
@@ -243,13 +243,13 @@ def test_print_relevance_summary():
 
 
 def test_print_no_reports():
-    from src.ui.display import print_no_reports
+    from sift.ui.display import print_no_reports
     out = _capture(print_no_reports)
     assert "No Reports Generated" in out or "No reports" in out
 
 
 def test_print_no_feedback_guidance():
-    from src.ui.display import print_no_feedback_guidance
+    from sift.ui.display import print_no_feedback_guidance
     out = _capture(print_no_feedback_guidance, "Notion", ["g2", "hacker_news"])
     assert "No feedback" in out
     assert "Notion" in out
@@ -258,7 +258,7 @@ def test_print_no_feedback_guidance():
 
 
 def test_print_done_banner():
-    from src.ui.display import print_done_banner
+    from sift.ui.display import print_done_banner
     out = _capture(print_done_banner, "output", ["output/appx_report.md", "output/appx_report.json"])
     assert "Done" in out
     assert "appx_report.md" in out
@@ -271,7 +271,7 @@ def test_print_done_banner():
 
 def test_setup_wizard_discard_does_not_write_env(tmp_path, monkeypatch):
     """Pressing Esc on the first prompt and choosing Discard must not touch .env."""
-    import src.ui.setup as setup_mod
+    import sift.ui.setup as setup_mod
 
     env_path = tmp_path / ".env"
     monkeypatch.setattr(setup_mod, "_ENV_PATH", env_path)
@@ -284,8 +284,8 @@ def test_setup_wizard_discard_does_not_write_env(tmp_path, monkeypatch):
     def fake_save_env(new_values, existing):
         save_calls.append(dict(new_values))
 
-    monkeypatch.setattr("src.ui.menu.read_line_with_escape", fake_read_line)
-    monkeypatch.setattr("src.ui.menu.prompt_exit_choice", lambda: "discard")
+    monkeypatch.setattr("sift.ui.menu.read_line_with_escape", fake_read_line)
+    monkeypatch.setattr("sift.ui.menu.prompt_exit_choice", lambda: "discard")
     monkeypatch.setattr(setup_mod, "_save_env", fake_save_env)
 
     setup_mod.run_setup_wizard()
@@ -296,7 +296,7 @@ def test_setup_wizard_discard_does_not_write_env(tmp_path, monkeypatch):
 
 def test_setup_wizard_save_persists_partial_values(tmp_path, monkeypatch):
     """Entering one value then Esc + Save must call _save_env with that value."""
-    import src.ui.setup as setup_mod
+    import sift.ui.setup as setup_mod
 
     env_path = tmp_path / ".env"
     monkeypatch.setattr(setup_mod, "_ENV_PATH", env_path)
@@ -314,8 +314,8 @@ def test_setup_wizard_save_persists_partial_values(tmp_path, monkeypatch):
     def fake_save_env(new_values, existing):
         save_calls.append(dict(new_values))
 
-    monkeypatch.setattr("src.ui.menu.read_line_with_escape", fake_read_line)
-    monkeypatch.setattr("src.ui.menu.prompt_exit_choice", lambda: "save")
+    monkeypatch.setattr("sift.ui.menu.read_line_with_escape", fake_read_line)
+    monkeypatch.setattr("sift.ui.menu.prompt_exit_choice", lambda: "save")
     monkeypatch.setattr(setup_mod, "_save_env", fake_save_env)
 
     setup_mod.run_setup_wizard()
@@ -326,7 +326,7 @@ def test_setup_wizard_save_persists_partial_values(tmp_path, monkeypatch):
 
 def test_setup_wizard_cancel_resumes(tmp_path, monkeypatch):
     """Esc + Cancel must resume at the same prompt without saving."""
-    import src.ui.setup as setup_mod
+    import sift.ui.setup as setup_mod
 
     env_path = tmp_path / ".env"
     monkeypatch.setattr(setup_mod, "_ENV_PATH", env_path)
@@ -339,8 +339,8 @@ def test_setup_wizard_cancel_resumes(tmp_path, monkeypatch):
         return next(answers)
 
     choices = iter(["cancel"])
-    monkeypatch.setattr("src.ui.menu.read_line_with_escape", fake_read_line)
-    monkeypatch.setattr("src.ui.menu.prompt_exit_choice", lambda: next(choices))
+    monkeypatch.setattr("sift.ui.menu.read_line_with_escape", fake_read_line)
+    monkeypatch.setattr("sift.ui.menu.prompt_exit_choice", lambda: next(choices))
 
     save_calls = []
 

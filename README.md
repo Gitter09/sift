@@ -23,42 +23,44 @@ G2 / App Stores / YouTube / HN / GitHub / Forums / Exports
               Multi-Product Comparison <──┘
 ```
 
-## Quick Start
+## Install
 
 **Prerequisites:** Python 3.11+ and an OpenAI-compatible LLM endpoint.
 
 ```bash
-# 1. Clone and install
-git clone https://github.com/<your-username>/sift.git
-cd sift
-pip install -e ".[dev]"
-
-# 2. Configure
-cp .env.example .env
-# Edit .env with your LLM API key and optional source API keys
-
-# 3. Run!
-python -m src.cli analyze "Notion" "Obsidian"
+pip install getsift
 ```
+
+## Quick Start
+
+```bash
+# 1. Install
+pip install getsift
+
+# 2. Set up (creates config.yaml and .env with your API keys)
+sift init
+
+# 3. Run — launches the interactive Rich frontend
+sift
+```
+
+That's it. `sift` opens an interactive terminal UI where you pick products and sources. No CLI arguments needed.
 
 ## CLI Commands
 
 ```bash
-# Analyze a single product
-python -m src.cli analyze "Linear"
+# Interactive mode (default — just run sift)
+sift
 
-# Compare multiple products
-python -m src.cli analyze "Figma" "Sketch" "Penpot"
+# First-run setup wizard (creates config.yaml + .env)
+sift init
 
-# Use only specific data sources
-python -m src.cli analyze "Slack" --source g2
-python -m src.cli analyze "VS Code" --source github_issues --source hacker_news
+# Scripted/automation use:
+sift analyze "Notion" "Obsidian" --source g2
+sift scrape "Slack" --source g2 --source app_store
 
-# Enable debug logging for troubleshooting
-python -m src.cli analyze "Notion" --verbose
-
-# Just scrape (no analysis)
-python -m src.cli scrape "Notion" --source g2 --source app_store
+# Debug logging
+sift analyze "Notion" --verbose
 ```
 
 ## Configuration
@@ -128,13 +130,14 @@ Each report includes:
 ## Architecture
 
 ```
-src/
+sift/
 ├── scrapers/          # Source adapters for public feedback channels
 ├── pipeline/          # Embeddings, clustering, LLM analysis, comparison, rate limiting, deduplication
 ├── models/            # Data classes (FeedbackItem, ClusterResult, ProductReport)
+├── ui/                # Rich terminal frontend, setup wizard, interactive menus
 ├── config.py          # YAML + env var configuration loader
-└── cli.py             # Click CLI (analyze, scrape commands)
-tests/                 # 34 tests covering all modules
+└── cli.py             # Click CLI (analyze, scrape, init commands)
+tests/                 # Tests covering all modules
 ```
 
 ## Running Tests

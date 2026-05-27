@@ -3,7 +3,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Dict
-from src.models.report import ProductReport, ComparisonReport
+from sift.models.report import ProductReport, ComparisonReport
 
 logger = logging.getLogger(__name__)
 

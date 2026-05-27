@@ -5,21 +5,21 @@ from typing import List, Optional
 
 import click
 
-from src.config import load_settings, setup_logging, Settings
-from src.scrapers.factory import (
+from sift.config import load_settings, setup_logging, Settings
+from sift.scrapers.factory import (
     AVAILABLE_SOURCES,
     default_sources,
     get_scraper,
     is_source_configured,
 )
-from src.pipeline.dedup import DedupFilter
-from src.pipeline.relevance import RelevanceFilter
-from src.pipeline.report_generator import save_reports
-from src.models.feedback import FeedbackItem
-from src.models.product_context import build_product_context
-from src.models.report import ProductReport, ComparisonReport
+from sift.pipeline.dedup import DedupFilter
+from sift.pipeline.relevance import RelevanceFilter
+from sift.pipeline.report_generator import save_reports
+from sift.models.feedback import FeedbackItem
+from sift.models.product_context import build_product_context
+from sift.models.report import ProductReport, ComparisonReport
 
-from src.ui.display import (
+from sift.ui.display import (
     console,
     print_banner,
     print_config_summary,
@@ -69,8 +69,8 @@ def main(ctx: click.Context, verbose: bool) -> None:
 
     if ctx.invoked_subcommand is None:
         # No subcommand → launch interactive mode.
-        from src.ui.setup import is_configured, run_setup_wizard
-        from src.ui.menu import run_main_menu
+        from sift.ui.setup import is_configured, run_setup_wizard
+        from sift.ui.menu import run_main_menu
 
         if not is_configured():
             run_setup_wizard()
@@ -159,10 +159,10 @@ def run_analyze(
             print_skip_warning(product, len(feedback))
             continue
 
-        from src.pipeline.analyzer import Analyzer
-        from src.pipeline.clusterer import Clusterer
-        from src.pipeline.comparator import Comparator
-        from src.pipeline.embedder import Embedder
+        from sift.pipeline.analyzer import Analyzer
+        from sift.pipeline.clusterer import Clusterer
+        from sift.pipeline.comparator import Comparator
+        from sift.pipeline.embedder import Embedder
 
         embedder = Embedder(settings.clustering)
         clusterer = Clusterer(settings.clustering)
@@ -204,7 +204,7 @@ def run_analyze(
     if not product_reports:
         empty_products = [product for product, feedback in all_feedback.items() if not feedback]
         if empty_products:
-            from src.ui.display import print_no_feedback_guidance
+            from sift.ui.display import print_no_feedback_guidance
 
             for product in empty_products:
                 print_no_feedback_guidance(product, sources)
@@ -290,7 +290,7 @@ def run_scrape(
     feedback = dedup.filter(feedback)
     print_dedup_summary(total_before, total_before - len(feedback), len(feedback))
     if not feedback:
-        from src.ui.display import print_no_feedback_guidance
+        from sift.ui.display import print_no_feedback_guidance
 
         print_no_feedback_guidance(product, sources)
 
@@ -305,6 +305,25 @@ def run_scrape(
 # ---------------------------------------------------------------------------
 # Click subcommand wrappers
 # ---------------------------------------------------------------------------
+
+
+@main.command("init")
+@click.option("--config", "-c", default="config.yaml", help="Path to config file to generate.")
+def init_cmd(config: str) -> None:
+    """Generate a default config.yaml and launch the API key setup wizard.
+
+    Run this after installing Sift to create the configuration files you need.
+    """
+    from sift.config_defaults import generate_default_config
+
+    created = generate_default_config(config)
+    if created:
+        click.echo(f"Created default config at: {config}")
+    else:
+        click.echo(f"Config file already exists at: {config} — skipping.")
+
+    from sift.ui.setup import run_setup_wizard
+    run_setup_wizard()
 
 
 @main.command()
@@ -390,7 +409,7 @@ def _resolve_sources(source: tuple[str, ...], settings: Settings) -> List[str]:
         and not is_source_configured(src, settings)
     ]
     if skipped:
-        from src.ui.display import print_unconfigured_sources
+        from sift.ui.display import print_unconfigured_sources
 
         print_unconfigured_sources(skipped)
     return resolved

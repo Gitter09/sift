@@ -1,5 +1,5 @@
-from src.pipeline.dedup import DedupFilter
-from src.models.feedback import FeedbackItem
+from sift.pipeline.dedup import DedupFilter
+from sift.models.feedback import FeedbackItem
 
 
 def test_dedup_filter_unique_items():

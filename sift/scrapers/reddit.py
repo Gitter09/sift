@@ -3,10 +3,10 @@ import logging
 import praw
 from typing import List
 from datetime import datetime
-from src.models.feedback import FeedbackItem
-from src.scrapers.base import BaseScraper
-from src.config import RedditConfig
-from src.pipeline.rate_limiter import PrawRateMonitor
+from sift.models.feedback import FeedbackItem
+from sift.scrapers.base import BaseScraper
+from sift.config import RedditConfig
+from sift.pipeline.rate_limiter import PrawRateMonitor
 
 logger = logging.getLogger(__name__)
 

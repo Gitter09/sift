@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List
-from src.models.feedback import FeedbackItem
+from sift.models.feedback import FeedbackItem
 
 
 class BaseScraper(ABC):

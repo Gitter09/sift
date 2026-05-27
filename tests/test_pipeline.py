@@ -1,9 +1,9 @@
 import numpy as np
-from src.models.feedback import FeedbackItem
-from src.models.cluster import ClusterResult
-from src.config import ClusteringConfig
-from src.pipeline.embedder import Embedder
-from src.pipeline.clusterer import Clusterer
+from sift.models.feedback import FeedbackItem
+from sift.models.cluster import ClusterResult
+from sift.config import ClusteringConfig
+from sift.pipeline.embedder import Embedder
+from sift.pipeline.clusterer import Clusterer
 
 
 # Use a lightweight config for tests

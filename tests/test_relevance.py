@@ -1,7 +1,7 @@
-from src.config import ProductProfileConfig, RelevanceConfig, Settings
-from src.models.feedback import FeedbackItem
-from src.models.product_context import build_product_context
-from src.pipeline.relevance import RelevanceFilter
+from sift.config import ProductProfileConfig, RelevanceConfig, Settings
+from sift.models.feedback import FeedbackItem
+from sift.models.product_context import build_product_context
+from sift.pipeline.relevance import RelevanceFilter
 
 
 def _settings() -> Settings:
