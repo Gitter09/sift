@@ -26,3 +26,8 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent/AI context files (local only)
+ARCHITECTURE.md
+CLAUDE.md
+AGENTS.md
