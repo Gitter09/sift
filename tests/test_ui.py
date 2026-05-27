@@ -234,6 +234,14 @@ def test_print_dedup_summary_no_duplicates():
     assert "filtered" not in out
 
 
+def test_print_relevance_summary():
+    from src.ui.display import print_relevance_summary
+    out = _capture(print_relevance_summary, 20, 4, 16)
+    assert "16" in out
+    assert "20" in out
+    assert "off-context" in out
+
+
 def test_print_no_reports():
     from src.ui.display import print_no_reports
     out = _capture(print_no_reports)

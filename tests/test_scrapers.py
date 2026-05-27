@@ -77,6 +77,7 @@ def test_factory_all_scrapers_uses_default_non_reddit_sources():
 
 def test_default_sources_include_configured_sources_only():
     settings = Settings(
+        g2=G2Config(proxy_url="https://proxy.example.com"),
         app_store=AppStoreConfig(app_ids={"Notion": "1232780281"}),
         github_issues=GitHubIssuesConfig(repos={"VS Code": ["microsoft/vscode"]}),
     )
@@ -93,6 +94,7 @@ def test_factory_can_reactivate_reddit_when_enabled():
     settings = Settings(
         sources=SourcesConfig(default_sources=["reddit", "g2"], disabled_sources=[]),
         reddit=RedditConfig(client_id="test_id", client_secret="test_secret"),
+        g2=G2Config(proxy_url="https://proxy.example.com"),
     )
     scrapers = get_all_scrapers(settings)
     assert [scraper.source_name for scraper in scrapers] == ["reddit", "g2"]

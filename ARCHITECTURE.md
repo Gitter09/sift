@@ -356,3 +356,23 @@ Both tiers are configurable via `use_playwright_fallback` in `config.yaml` per-s
 **Decision:** Removed `transient=True` from both progress classes so bars stay visible after completion. Added `MofNCompleteColumn` between the bar and the percentage so the output reads e.g. "7/16 • 44% • 0:08" — showing tasks completed rather than just a fraction of the filled rectangle.
 **Why:** A progress indicator that vanishes the moment work is done provides no information — it can't be read after the fact and doesn't let the user gauge how long a phase took. Persisting the bar turns it into a lightweight execution log: users can see that scraping took 16 tasks and the pipeline took 5 stages, which is genuinely useful context when something is slow or fails.
 **LinkedIn Angle:** "A progress bar that disappears the moment it hits 100% is a spinner in disguise — persist it so users can actually read what just happened."
+
+---
+
+## Decision 034: Reasoning-Model Output Handling in the Analyzer
+
+**Date:** 2026-05-26
+**Context:** With `deepseek-v4-pro` (via OpenCode Zen) configured as the LLM, every cluster analysis call billed the full 2000-token output budget but Sift logged "LLM returned empty response" on every attempt. The provider dashboard confirmed real token spend — input ~500, output exactly 2000 — but the visible `message.content` was empty. The cause: reasoning models put their chain of thought either in a separate `message.reasoning_content` field or inside `<think>...</think>` tags inside `content`, and only emit the final answer after thinking. With `max_tokens=2000`, the model spent the entire budget thinking and never produced visible content.
+**Decision:** Updated `Analyzer._call_llm` to (1) strip `<think>...</think>` blocks (including unclosed trailing blocks from truncation) from `message.content`, (2) fall back to `message.reasoning_content` (and the OpenAI SDK's `model_extra.reasoning_content`/`reasoning`) when `content` is empty, and (3) surface `finish_reason="length"` in the raised error so the failure mode is diagnosable instead of a generic "empty response". Raised the default `max_tokens` in `config.yaml` from 2000 to 8000 so the model has room to finish its reasoning before producing the JSON answer.
+**Why:** Treating reasoning models as if they were ordinary chat models silently wastes money and produces confusing failures. The `<think>` strip and `reasoning_content` fallback make Sift portable across providers that route reasoning differently. Exposing `finish_reason="length"` turns a mystery into an actionable error. The token bump is the simplest reliability lever: reasoning is variable-length, and a tight cap converts a transient slow call into a permanent failure.
+**LinkedIn Angle:** "If your LLM client treats a reasoning model like a plain chat model, you'll pay full freight for empty responses — strip `<think>` blocks, read `reasoning_content`, and check `finish_reason`."
+
+---
+
+## Decision 035: Product Context Relevance Gate Before Analysis
+
+**Date:** 2026-05-27
+**Context:** Broad source searches treated a product name as a plain keyword, so ambiguous products collected off-context feedback: "Droid" matched Android OS discussions, and "OpenCode" runs pulled generic Anthropic API pricing complaints instead of product feedback.
+**Decision:** Added config-backed product profiles plus a pipeline-level relevance filter that runs after scraping and before deduplication, embedding, clustering, and LLM analysis. Profiles define aliases, negative terms, category, description, website, and stable identifiers. Each `FeedbackItem` gets relevance metadata, and the CLI reports how many off-context items were rejected.
+**Why:** Scrapers should collect candidates, not decide final product truth. A centralized relevance gate keeps the `BaseScraper` contract stable, applies one quality policy across every source, and prevents noisy candidates from contaminating expensive clustering and LLM stages.
+**LinkedIn Angle:** "Keyword search is not product understanding — add a relevance gate before your AI pipeline or your insights will confidently analyze the wrong thing."

@@ -21,6 +21,8 @@ def test_load_settings_defaults():
     assert settings.reddit.praw_ratelimit_seconds == 300
     assert settings.llm.base_url == "https://api.openai.com/v1"
     assert settings.logging.level == "ERROR"
+    assert settings.relevance.enabled is True
+    assert settings.relevance.threshold == 0.45
     assert "reddit" in settings.sources.disabled_sources
     assert "g2" in settings.sources.default_sources
     assert "hacker_news" in settings.sources.default_sources
@@ -55,6 +57,20 @@ reddit:
 g2:
   request_delay: 3.0
   max_requests_per_minute: 8
+relevance:
+  enabled: false
+  threshold: 0.6
+products:
+  Droid:
+    aliases:
+      - Factory Droid
+    negative_terms:
+      - Android
+    category: AI coding agent
+    description: Factory coding agent
+    website: factory.ai
+    repos:
+      - factory/droid
 clustering:
   embedding_model: "all-MiniLM-L12-v2"
   hdbscan_min_cluster_size: 5
@@ -73,6 +89,11 @@ llm:
         assert settings.sources.disabled_sources == ["reddit"]
         assert settings.g2.request_delay == 3.0
         assert settings.g2.max_requests_per_minute == 8
+        assert settings.relevance.enabled is False
+        assert settings.relevance.threshold == 0.6
+        assert settings.products["Droid"].aliases == ["Factory Droid"]
+        assert settings.products["Droid"].negative_terms == ["Android"]
+        assert settings.products["Droid"].repos == ["factory/droid"]
         assert settings.clustering.hdbscan_min_cluster_size == 5
         assert settings.llm.model == "gpt-4o"
         os.unlink(f.name)

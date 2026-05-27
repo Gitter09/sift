@@ -33,6 +33,26 @@ class SourcesConfig:
 
 
 @dataclass
+class ProductProfileConfig:
+    aliases: List[str] = field(default_factory=list)
+    negative_terms: List[str] = field(default_factory=list)
+    category: str = ""
+    description: str = ""
+    website: str = ""
+    repos: List[str] = field(default_factory=list)
+    slugs: List[str] = field(default_factory=list)
+    app_ids: List[str] = field(default_factory=list)
+    package_names: List[str] = field(default_factory=list)
+
+
+@dataclass
+class RelevanceConfig:
+    enabled: bool = True
+    threshold: float = 0.45
+    min_items_before_relaxing: int = 3
+
+
+@dataclass
 class RedditConfig:
     client_id: str = ""
     client_secret: str = ""
@@ -208,6 +228,8 @@ class LoggingConfig:
 @dataclass
 class Settings:
     sources: SourcesConfig = field(default_factory=SourcesConfig)
+    products: Dict[str, ProductProfileConfig] = field(default_factory=dict)
+    relevance: RelevanceConfig = field(default_factory=RelevanceConfig)
     reddit: RedditConfig = field(default_factory=RedditConfig)
     g2: G2Config = field(default_factory=G2Config)
     app_store: AppStoreConfig = field(default_factory=AppStoreConfig)
@@ -235,6 +257,8 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             yaml_data = yaml.safe_load(f) or {}
 
     sources_raw = yaml_data.get("sources", {})
+    products_raw = yaml_data.get("products", {})
+    relevance_raw = yaml_data.get("relevance", {})
     reddit_raw = yaml_data.get("reddit", {})
     g2_raw = yaml_data.get("g2", {})
     app_store_raw = yaml_data.get("app_store", {})
@@ -262,6 +286,29 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
         sources=SourcesConfig(
             default_sources=sources_raw.get("default_sources", DEFAULT_ACTIVE_SOURCES.copy()),
             disabled_sources=sources_raw.get("disabled_sources", ["reddit"]),
+        ),
+        products={
+            name: ProductProfileConfig(
+                aliases=profile.get("aliases", []) or [],
+                negative_terms=profile.get("negative_terms", []) or [],
+                category=profile.get("category", "") or "",
+                description=profile.get("description", "") or "",
+                website=profile.get("website", "") or "",
+                repos=profile.get("repos", []) or [],
+                slugs=profile.get("slugs", []) or [],
+                app_ids=[
+                    str(app_id)
+                    for app_id in (profile.get("app_ids", []) or [])
+                ],
+                package_names=profile.get("package_names", []) or [],
+            )
+            for name, profile in products_raw.items()
+            if isinstance(profile, dict)
+        },
+        relevance=RelevanceConfig(
+            enabled=relevance_raw.get("enabled", True),
+            threshold=float(relevance_raw.get("threshold", 0.45)),
+            min_items_before_relaxing=relevance_raw.get("min_items_before_relaxing", 3),
         ),
         reddit=RedditConfig(
             client_id=os.getenv("REDDIT_CLIENT_ID", reddit_raw.get("client_id", "")),

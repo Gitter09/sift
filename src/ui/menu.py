@@ -17,7 +17,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 
-from src.ui.display import print_large_banner
+from src.ui.display import print_large_banner, VERSION, _git_info, ACCENT_COLOR
 from src.ui.setup import run_setup_wizard
 from src.config import load_settings
 from src.scrapers.factory import AVAILABLE_SOURCES, default_sources
@@ -68,71 +68,78 @@ def _render_menu(current: int) -> None:
     lines = []
     for i, label in enumerate(_MENU_LABELS):
         if i == current:
-            lines.append(f"   [bold]▶  {label}[/bold]")
+            lines.append(f"   [bold {ACCENT_COLOR}]▶  {label}[/bold {ACCENT_COLOR}]")
         else:
             lines.append(f"      {label}")
-    console.print(Panel("\n".join(lines), title="Main Menu", border_style="white", padding=(1, 2)))
-    console.print("  [dim]↑ ↓  navigate    enter  select    q  quit[/dim]")
+    git = _git_info()
+    border_title = f"[{ACCENT_COLOR}]Sift v{VERSION}  ·  {git}[/{ACCENT_COLOR}]" if git else f"[{ACCENT_COLOR}]Sift v{VERSION}[/{ACCENT_COLOR}]"
+    console.print(Panel("\n".join(lines), title=border_title, title_align="center", border_style=ACCENT_COLOR, padding=(1, 2)))
+    console.print(f"  [{ACCENT_COLOR}]↑ ↓[/{ACCENT_COLOR}]  [dim]navigate    enter  select    q  quit[/dim]")
 
 
 def run_main_menu() -> None:
     """Main interactive loop: show banner, navigate menu with arrow keys."""
     current = 0
-
-    while True:
-        console.clear()
-        print_large_banner()
-        _render_menu(current)
-
-        # Navigate until Enter or q
+    sys.stdout.write('\033[?25l')  # hide cursor while navigating
+    sys.stdout.flush()
+    try:
         while True:
-            key = _read_key()
-            if key == 'up':
-                current = (current - 1) % len(_MENU_LABELS)
-            elif key == 'down':
-                current = (current + 1) % len(_MENU_LABELS)
-            elif key == 'enter':
-                break
-            elif key == 'q':
-                current = len(_MENU_LABELS) - 1  # jump to Exit
-                break
-            else:
-                continue
-
-            sys.stdout.write(f'\033[{_MENU_TOTAL_LINES}A\r')
-            sys.stdout.flush()
-            _render_menu(current)
-
-        if current == 3:  # Exit
-            console.print()
-            console.print(
-                Panel(
-                    "[dim]Goodbye! Run [bold]sift[/bold] anytime to return.[/dim]",
-                    border_style="dim",
-                )
-            )
-            console.print()
-            break
-
-        elif current == 0:
-            _interactive_analyze()
-
-        elif current == 1:
-            _interactive_scrape()
-
-        elif current == 2:
             console.clear()
             print_large_banner()
-            run_setup_wizard()
-            load_dotenv(override=True)
-            console.print(
-                Panel(
-                    "[green bold]✓ Settings updated.[/green bold]\n"
-                    "[dim]Press Enter to return to the menu.[/dim]",
-                    border_style="green",
+            _render_menu(current)
+
+            # Navigate until Enter or q
+            while True:
+                key = _read_key()
+                if key == 'up':
+                    current = (current - 1) % len(_MENU_LABELS)
+                elif key == 'down':
+                    current = (current + 1) % len(_MENU_LABELS)
+                elif key == 'enter':
+                    break
+                elif key == 'q':
+                    current = len(_MENU_LABELS) - 1  # jump to Exit
+                    break
+                else:
+                    continue
+
+                sys.stdout.write(f'\033[{_MENU_TOTAL_LINES}A\r')
+                sys.stdout.flush()
+                _render_menu(current)
+
+            if current == 3:  # Exit
+                console.print()
+                console.print(
+                    Panel(
+                        "[dim]Goodbye! Run [bold]sift[/bold] anytime to return.[/dim]",
+                        border_style="dim",
+                    )
                 )
-            )
-            Prompt.ask("", default="", show_default=False)
+                console.print()
+                break
+
+            elif current == 0:
+                _interactive_analyze()
+
+            elif current == 1:
+                _interactive_scrape()
+
+            elif current == 2:
+                console.clear()
+                print_large_banner()
+                run_setup_wizard()
+                load_dotenv(override=True)
+                console.print(
+                    Panel(
+                        "[green bold]✓ Settings updated.[/green bold]\n"
+                        "[dim]Press Enter to return to the menu.[/dim]",
+                        border_style="green",
+                    )
+                )
+                Prompt.ask("", default="", show_default=False)
+    finally:
+        sys.stdout.write('\033[?25h')  # restore cursor on exit or exception
+        sys.stdout.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -145,12 +152,16 @@ def _interactive_analyze() -> None:
     console.clear()
     print_large_banner()
 
+    git = _git_info()
+    border_title = f"[dim]Sift v{VERSION}  ·  {git}[/dim]" if git else f"[dim]Sift v{VERSION}[/dim]"
     console.print(
         Panel(
             "[bold]Analyze Product[/bold]\n"
             "[dim]Sift will scrape feedback, cluster complaints, "
             "and generate AI-powered insights.[/dim]",
-            border_style="white",
+            title=border_title,
+            title_align="center",
+            border_style=ACCENT_COLOR,
         )
     )
     console.print()
@@ -188,6 +199,7 @@ def _interactive_analyze() -> None:
         output=output_dir,
         no_preview=False,
         verbose=verbose,
+        show_banner=False,
     )
 
     console.print()
@@ -203,11 +215,15 @@ def _interactive_scrape() -> None:
     console.clear()
     print_large_banner()
 
+    git = _git_info()
+    border_title = f"[dim]Sift v{VERSION}  ·  {git}[/dim]" if git else f"[dim]Sift v{VERSION}[/dim]"
     console.print(
         Panel(
             "[bold]Scrape Product[/bold]\n"
             "[dim]Collect raw feedback without clustering or analysis.[/dim]",
-            border_style="white",
+            title=border_title,
+            title_align="center",
+            border_style=ACCENT_COLOR,
         )
     )
     console.print()
@@ -240,6 +256,7 @@ def _interactive_scrape() -> None:
         settings=settings,
         output=output_dir,
         verbose=verbose,
+        show_banner=False,
     )
 
     console.print()

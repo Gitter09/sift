@@ -1,10 +1,18 @@
 import logging
+import re
 import time
 from typing import List
 from openai import OpenAI
 from src.models.cluster import ClusterResult
 from src.config import LLMConfig
 from src.pipeline.llm_json import log_parse_debug, parse_json_object
+
+
+# Reasoning models (DeepSeek, OpenCode "v4-pro" variants) may emit their chain
+# of thought inside <think>...</think> tags in `content`, or in a separate
+# `reasoning_content` field, and only then produce the final answer.
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
+_OPEN_THINK_RE = re.compile(r"<think\b[^>]*>.*", re.DOTALL | re.IGNORECASE)
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +109,7 @@ class Analyzer:
     def _call_llm(self, prompt: str, _retries: int = 2) -> str:
         if self.client is None:
             raise RuntimeError(self._unavailable_reason or "LLM client is unavailable")
-        last_exc: Exception = RuntimeError("LLM returned empty response")
+        last_reason = "empty response"
         for attempt in range(_retries + 1):
             if attempt:
                 time.sleep(attempt)
@@ -114,11 +122,43 @@ class Analyzer:
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
             )
-            content = (response.choices[0].message.content or "").strip()
+            choice = response.choices[0]
+            message = choice.message
+            finish_reason = getattr(choice, "finish_reason", None)
+
+            content = _strip_thinking(message.content or "")
             if content:
                 return content
-            logger.debug("LLM returned empty response on attempt %d/%d", attempt + 1, _retries + 1)
-        raise last_exc
+
+            # Reasoning models (DeepSeek-style) often place the final answer in a
+            # separate `reasoning_content` field when `content` is empty.
+            reasoning = getattr(message, "reasoning_content", None) or ""
+            if not reasoning:
+                # Some OpenAI-compatible gateways nest it inside model_extra.
+                extra = getattr(message, "model_extra", None) or {}
+                reasoning = extra.get("reasoning_content") or extra.get("reasoning") or ""
+            reasoning = _strip_thinking(reasoning)
+            if reasoning:
+                logger.debug(
+                    "LLM content was empty; falling back to reasoning_content (%d chars).",
+                    len(reasoning),
+                )
+                return reasoning
+
+            if finish_reason == "length":
+                last_reason = (
+                    f"output truncated at max_tokens={self.max_tokens} before any "
+                    "visible content was emitted (model spent the budget on reasoning)"
+                )
+            else:
+                last_reason = f"empty response (finish_reason={finish_reason!r})"
+            logger.debug(
+                "LLM returned empty response on attempt %d/%d: %s",
+                attempt + 1,
+                _retries + 1,
+                last_reason,
+            )
+        raise RuntimeError(f"LLM returned empty response: {last_reason}")
 
     def analyze_cluster(self, cluster: ClusterResult) -> ClusterResult:
         quotes = "\n".join(f"- \"{q}\"" for q in cluster.representative_quotes)
@@ -225,6 +265,19 @@ _OVERALL_SCHEMA = """{
   "overall_insights": "3-4 sentence product assessment",
   "top_pain_points": ["pain point 1", "pain point 2", "pain point 3"]
 }"""
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove reasoning-model `<think>...</think>` blocks from a response.
+
+    Handles both closed blocks and an unclosed trailing block (which happens
+    when the response is truncated mid-thought by max_tokens).
+    """
+    if not text:
+        return ""
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    cleaned = _OPEN_THINK_RE.sub("", cleaned)
+    return cleaned.strip()
 
 
 def _clean_string(value: object) -> str:

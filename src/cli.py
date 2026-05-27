@@ -13,8 +13,10 @@ from src.scrapers.factory import (
     is_source_configured,
 )
 from src.pipeline.dedup import DedupFilter
+from src.pipeline.relevance import RelevanceFilter
 from src.pipeline.report_generator import save_reports
 from src.models.feedback import FeedbackItem
+from src.models.product_context import build_product_context
 from src.models.report import ProductReport, ComparisonReport
 
 from src.ui.display import (
@@ -31,6 +33,7 @@ from src.ui.display import (
     print_unknown_sources,
     print_no_scraper,
     print_dedup_summary,
+    print_relevance_summary,
     print_no_reports,
     ScrapeProgress,
     PipelineProgress,
@@ -87,6 +90,7 @@ def run_analyze(
     output: str = "output",
     no_preview: bool = False,
     verbose: bool = False,
+    show_banner: bool = True,
 ) -> None:
     """Run the full analyze pipeline for one or more products.
 
@@ -95,10 +99,12 @@ def run_analyze(
     """
     setup_logging(settings, verbose=verbose)
 
-    print_banner()
+    if show_banner:
+        print_banner()
     print_config_summary(settings, sources)
 
     dedup = DedupFilter()
+    relevance = RelevanceFilter(settings.relevance)
     all_feedback: dict[str, list[FeedbackItem]] = {}
 
     total_scrape_tasks = len(products) * len(sources)
@@ -125,14 +131,27 @@ def run_analyze(
             counts_str = ", ".join(f"{s}={source_counts.get(s, 0)}" for s in sources if s in source_counts)
             logger.info("Source breakdown for '%s': %s", product, counts_str)
 
-            # Deduplicate and cap
-            total_before = len(feedback)
+            context = build_product_context(product, settings)
+            total_before_relevance = len(feedback)
+            feedback, relevance_stats = relevance.filter(feedback, context)
+            print_relevance_summary(
+                total_before_relevance,
+                relevance_stats.rejected,
+                relevance_stats.kept,
+                relevance_stats.relaxed,
+            )
+
+            total_before_dedup = len(feedback)
             feedback = dedup.filter(feedback)
             if len(feedback) > settings.max_feedback_per_source:
                 feedback = feedback[:settings.max_feedback_per_source]
 
             all_feedback[product] = feedback
-            print_dedup_summary(total_before, total_before - len(feedback), len(feedback))
+            print_dedup_summary(
+                total_before_dedup,
+                total_before_dedup - len(feedback),
+                len(feedback),
+            )
 
     product_reports: dict[str, ProductReport] = {}
     for product, feedback in all_feedback.items():
@@ -226,6 +245,7 @@ def run_scrape(
     settings: Settings,
     output: str = "output",
     verbose: bool = False,
+    show_banner: bool = True,
 ) -> None:
     """Run the scrape-only pipeline for a single product.
 
@@ -234,10 +254,12 @@ def run_scrape(
     """
     setup_logging(settings, verbose=verbose)
 
-    print_banner()
+    if show_banner:
+        print_banner()
     print_config_summary(settings, sources)
 
     dedup = DedupFilter()
+    relevance = RelevanceFilter(settings.relevance)
     feedback: list[FeedbackItem] = []
     with ScrapeProgress(total=len(sources)) as scrape_progress:
         for src in sources:
@@ -253,6 +275,16 @@ def run_scrape(
             else:
                 print_no_scraper(src)
             scrape_progress.advance()
+
+    context = build_product_context(product, settings)
+    total_before_relevance = len(feedback)
+    feedback, relevance_stats = relevance.filter(feedback, context)
+    print_relevance_summary(
+        total_before_relevance,
+        relevance_stats.rejected,
+        relevance_stats.kept,
+        relevance_stats.relaxed,
+    )
 
     total_before = len(feedback)
     feedback = dedup.filter(feedback)

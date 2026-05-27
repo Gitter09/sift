@@ -5,6 +5,7 @@ All terminal formatting lives here. Pipeline and model code never touches Rich d
 
 from __future__ import annotations
 
+import subprocess
 from typing import List
 
 from rich import box
@@ -38,6 +39,19 @@ SEVERITY_COLORS = {"high": "red", "medium": "yellow", "low": "green"}
 SEVERITY_ICONS = {"high": "🔴", "medium": "🟡", "low": "🟢"}
 SOURCE_COLOR = "white"
 
+# --- Aurora theme ---
+# 7 stops, one per shape row — violet top fading to deep purple bottom
+_AURORA_STOPS = [
+    "#A78BFA",  # row 0  violet-400 (top)
+    "#9B79F7",  # row 1
+    "#8F67F4",  # row 2
+    "#8355F1",  # row 3
+    "#7743EE",  # row 4
+    "#6B31EB",  # row 5
+    "#5F1FE8",  # row 6  deep violet-purple (bottom)
+]
+ACCENT_COLOR = "#8B5CF6"   # mid-violet — used for borders, tagline, menu hints
+
 SIFT_BANNER = (
     "███████╗    ██╗    ███████╗    ████████╗\n"
     "██╔════╝    ██║    ██╔════╝    ╚══██╔══╝\n"
@@ -49,25 +63,53 @@ SIFT_BANNER = (
     "Product Research Tool"
 )
 
-LARGE_BANNER = (
-    "███████╗       ██╗       ███████╗       ████████╗\n"
-    "██╔════╝       ██║       ██╔════╝       ╚══██╔══╝\n"
-    "███████╗       ██║       █████╗           ██║\n"
-    "╚════██║       ██║       ██╔══╝           ██║\n"
-    "███████║       ██║       ██║              ██║\n"
-    "╚══════╝       ╚═╝       ╚═╝              ╚═╝\n"
-    "\n"
-    "Scrape · Cluster · Analyze Product Feedback"
-)
+_PIXEL_MAPS = {
+    # S: top bar anchors left edge, bottom bar anchors right edge — proper S flow
+    'S': ['1111110', '1100000', '1100000', '0111110', '0000011', '0000011', '0111111'],
+    # I/T: 3-pixel-wide stem (pixels 2-4 in 7-wide grid) for equal gaps left & right
+    'I': ['1111111', '0011100', '0011100', '0011100', '0011100', '0011100', '1111111'],
+    'F': ['1111111', '1100000', '1100000', '1111100', '1100000', '1100000', '1100000'],
+    'T': ['1111111', '0011100', '0011100', '0011100', '0011100', '0011100', '0011100'],
+}
+
+
+def _render_sift_pixels(scale_x: int = 3, scale_y: int = 2, gap: int = 3) -> list[str]:
+    word = 'SIFT'
+    rows = []
+    for row_idx in range(7):
+        line = ''
+        for i, ch in enumerate(word):
+            if i > 0:
+                line += ' ' * gap
+            for pixel in _PIXEL_MAPS[ch][row_idx]:
+                line += '█' * scale_x if pixel == '1' else ' ' * scale_x
+        for _ in range(scale_y):
+            rows.append(line)
+    return rows
 
 
 def _get_version() -> str:
-    """Return the installed package version, or a fallback."""
     try:
         from importlib.metadata import version
         return version("getsift")
     except Exception:
         return "0.1.0"
+
+
+VERSION = _get_version()
+
+
+def _git_info() -> str:
+    try:
+        branch = subprocess.check_output(
+            ["git", "branch", "--show-current"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        return f"{branch} · {commit}" if branch else commit
+    except Exception:
+        return ""
 
 
 def _severity_text(severity: str | None) -> Text:
@@ -97,17 +139,26 @@ def print_banner() -> None:
 
 
 def print_large_banner() -> None:
-    console.print("\n" * 10, end="")
-    lines = LARGE_BANNER.split("\n")
-    gradient = ["bold bright_white", "bold bright_white", "bold white", "bold white", "white", "white"]
-    for i, line in enumerate(lines[:6]):
-        console.print(line, justify="center", style=gradient[i])
-    for line in lines[6:]:
-        if line.strip():
-            console.print(line, justify="center", style="dim")
-        else:
-            console.print()
-    console.print(f"v{_get_version()}", justify="center", style="dim")
+    # Pick scale based on terminal width: 3×2 needs ~96 cols, 2×2 needs ~68
+    if console.width >= 96:
+        scale_y = 2
+        lines = _render_sift_pixels(scale_x=3, scale_y=scale_y, gap=3)
+    elif console.width >= 68:
+        scale_y = 2
+        lines = _render_sift_pixels(scale_x=2, scale_y=scale_y, gap=2)
+    else:
+        scale_y = 1
+        lines = _render_sift_pixels(scale_x=1, scale_y=scale_y, gap=2)
+
+    # Each aurora stop repeats scale_y times (one stop per shape row)
+    colors = [c for c in _AURORA_STOPS for _ in range(scale_y)]
+
+    console.print()
+    for line, color in zip(lines, colors):
+        console.print(f"[bold {color}]{line}[/bold {color}]", justify="center")
+    console.print()
+    console.print(f"[{ACCENT_COLOR}]◈  Scrape · Cluster · Analyze  ◈[/{ACCENT_COLOR}]", justify="center")
+    console.print(f"[dim {ACCENT_COLOR}]v{VERSION}[/dim {ACCENT_COLOR}]", justify="center")
     console.print()
 
 
@@ -366,6 +417,19 @@ def print_unconfigured_sources(sources: list[str]) -> None:
 def print_dedup_summary(total: int, duplicates: int, kept: int) -> None:
     dup_msg = f" (filtered {duplicates} duplicate{'s' if duplicates != 1 else ''})" if duplicates else ""
     console.print(f"[dim]Collected {kept} unique items from {total} total{dup_msg}.[/dim]")
+
+
+def print_relevance_summary(total: int, rejected: int, kept: int, relaxed: bool = False) -> None:
+    if total == 0:
+        console.print("[dim]No items collected before relevance filtering.[/dim]")
+        return
+    relaxed_msg = " threshold relaxed" if relaxed else ""
+    reject_msg = (
+        f" (rejected {rejected} off-context item{'s' if rejected != 1 else ''}{relaxed_msg})"
+        if rejected or relaxed
+        else ""
+    )
+    console.print(f"[dim]Kept {kept} context-relevant items from {total} collected{reject_msg}.[/dim]")
 
 
 def print_no_reports() -> None:
