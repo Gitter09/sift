@@ -16,7 +16,7 @@ import tty
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt, Confirm
+from rich.prompt import Prompt
 
 from src.ui.display import print_large_banner, VERSION, _git_info
 from src.ui.theme import (
@@ -151,6 +151,60 @@ def read_line_with_escape(
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
+def confirm_with_escape(
+    label: str,
+    default: bool = True,
+) -> bool | None:
+    """Render a Rich-styled Yes/No confirm and return True/False, or None if Esc.
+
+    Mirrors ``rich.prompt.Confirm.ask`` but intercepts Esc to cancel back
+    to the main menu.
+
+    - ``default`` controls the capital letter: ``Y/n`` when True, ``y/N``
+      when False.
+    - Returns ``None`` when the user presses Escape.
+    """
+    yes_char = "Y" if default else "y"
+    no_char = "n" if default else "N"
+    suffix = f" [{TEXT_MUTED}]({yes_char}/{no_char})[/{TEXT_MUTED}]"
+    console.print(f"{label}{suffix}[{TEXT_MUTED}]:[/{TEXT_MUTED}] ", end="")
+    sys.stdout.flush()
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = os.read(fd, 1)
+            if ch == b'\x1b':
+                ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+                if ready:
+                    _ = os.read(fd, 1)
+                    ready2, _, _ = select.select([sys.stdin], [], [], 0.05)
+                    if ready2:
+                        _ = os.read(fd, 1)
+                    continue
+                sys.stdout.write("\r\n")
+                sys.stdout.flush()
+                return None
+            if ch in (b'\r', b'\n'):
+                sys.stdout.write("\r\n")
+                sys.stdout.flush()
+                return default
+            if ch == b'\x03':
+                raise KeyboardInterrupt
+            if ch.lower() == b'y':
+                sys.stdout.write("y\r\n")
+                sys.stdout.flush()
+                return True
+            if ch.lower() == b'n':
+                sys.stdout.write("n\r\n")
+                sys.stdout.flush()
+                return False
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 _EXIT_CHOICES = [
     ("save", "Save", "Persist what you've entered so far"),
     ("discard", "Discard", "Throw away changes and return to menu"),
@@ -244,7 +298,8 @@ def _render_menu(current: int) -> None:
         f"  [{VIOLET}]\u2191 \u2193[/{VIOLET}]  "
         f"[{TEXT_MUTED}]navigate[/{TEXT_MUTED}]  {ICON_DOT}  "
         f"enter  [{TEXT_SECONDARY}]select[/{TEXT_SECONDARY}]  {ICON_DOT}  "
-        f"q  [{TEXT_MUTED}]quit[/{TEXT_MUTED}]"
+        f"q  [{TEXT_MUTED}]quit[/{TEXT_MUTED}]  {ICON_DOT}  "
+        f"Esc  [{TEXT_MUTED}]back[/{TEXT_MUTED}]"
     )
 
 
@@ -293,6 +348,8 @@ def run_main_menu() -> None:
                     elif key == 'q':
                         current = len(_MENU_LABELS) - 1  # jump to Exit
                         break
+                    elif key == 'escape':
+                        continue  # already at top-level menu — no-op
                     else:
                         continue
 
@@ -341,6 +398,13 @@ def run_main_menu() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _print_returning() -> None:
+    """Print a brief 'returning to menu' status and pause for readability."""
+    console.print()
+    console.print(f"  [{AMBER}]Returning to menu.[/{AMBER}]")
+    time.sleep(1.2)
+
+
 def _interactive_analyze() -> None:
     """Prompt for product and sources, then run the full analyze pipeline."""
     console.clear()
@@ -353,16 +417,20 @@ def _interactive_analyze() -> None:
     )
     console.print()
 
-    product_raw = Prompt.ask(
+    product_raw = read_line_with_escape(
         f"  [bold {TEXT_PRIMARY}]Product name(s)[/bold {TEXT_PRIMARY}] "
-        f"[{TEXT_MUTED}](comma-separated)[/{TEXT_MUTED}]"
+        f"[{TEXT_MUTED}](comma-separated, Esc to cancel)[/{TEXT_MUTED}]",
     )
+    if product_raw is None:
+        _print_returning()
+        return
+
     products = [p.strip() for p in product_raw.split(",") if p.strip()]
     if not products:
         console.print(
             f"[{AMBER}]No product entered. Returning to menu.[/{AMBER}]"
         )
-        Prompt.ask("  Press Enter to continue", default="", show_default=False)
+        time.sleep(1.2)
         return
 
     sources = _prompt_sources()
@@ -370,19 +438,25 @@ def _interactive_analyze() -> None:
         console.print(
             f"[{AMBER}]No sources available. Returning to menu.[/{AMBER}]"
         )
-        Prompt.ask("  Press Enter to continue", default="", show_default=False)
+        time.sleep(1.2)
         return
 
-    output_dir = Prompt.ask(
+    output_dir = read_line_with_escape(
         f"  [bold {TEXT_PRIMARY}]Output directory[/bold {TEXT_PRIMARY}]",
         default="output",
     )
+    if output_dir is None:
+        _print_returning()
+        return
 
     settings = load_settings()
-    verbose = Confirm.ask(
+    verbose = confirm_with_escape(
         f"  [bold {TEXT_PRIMARY}]Enable verbose logging?[/bold {TEXT_PRIMARY}]",
         default=False,
     )
+    if verbose is None:
+        _print_returning()
+        return
 
     # Lazy import to avoid circular dependency at module level.
     from src.cli import run_analyze as _run
@@ -416,12 +490,19 @@ def _interactive_scrape() -> None:
     )
     console.print()
 
-    product = Prompt.ask(f"  [bold {TEXT_PRIMARY}]Product name[/bold {TEXT_PRIMARY}]")
-    if not product.strip():
+    product_name = read_line_with_escape(
+        f"  [bold {TEXT_PRIMARY}]Product name[/bold {TEXT_PRIMARY}] "
+        f"[{TEXT_MUTED}](Esc to cancel)[/{TEXT_MUTED}]",
+    )
+    if product_name is None:
+        _print_returning()
+        return
+
+    if not product_name.strip():
         console.print(
             f"[{AMBER}]No product entered. Returning to menu.[/{AMBER}]"
         )
-        Prompt.ask("  Press Enter to continue", default="", show_default=False)
+        time.sleep(1.2)
         return
 
     sources = _prompt_sources()
@@ -429,24 +510,30 @@ def _interactive_scrape() -> None:
         console.print(
             f"[{AMBER}]No sources available. Returning to menu.[/{AMBER}]"
         )
-        Prompt.ask("  Press Enter to continue", default="", show_default=False)
+        time.sleep(1.2)
         return
 
-    output_dir = Prompt.ask(
+    output_dir = read_line_with_escape(
         f"  [bold {TEXT_PRIMARY}]Output directory[/bold {TEXT_PRIMARY}]",
         default="output",
     )
+    if output_dir is None:
+        _print_returning()
+        return
 
     settings = load_settings()
-    verbose = Confirm.ask(
+    verbose = confirm_with_escape(
         f"  [bold {TEXT_PRIMARY}]Enable verbose logging?[/bold {TEXT_PRIMARY}]",
         default=False,
     )
+    if verbose is None:
+        _print_returning()
+        return
 
     from src.cli import run_scrape as _run
 
     _run(
-        product=product.strip(),
+        product=product_name.strip(),
         sources=sources,
         settings=settings,
         output=output_dir,
@@ -463,14 +550,19 @@ def _interactive_scrape() -> None:
 
 
 def _prompt_sources() -> list[str]:
-    """Ask the user which sources to use. Returns a list of source keys."""
+    """Ask the user which sources to use. Returns a list of source keys.
+
+    Returns empty list if the user presses Escape at any point.
+    """
     settings = load_settings()
     defaults = default_sources(settings)
-    use_defaults = Confirm.ask(
+    use_defaults = confirm_with_escape(
         f"  [bold {TEXT_PRIMARY}]Use default sources?[/bold {TEXT_PRIMARY}] "
         f"[{TEXT_MUTED}]({', '.join(defaults[:6])}{'...' if len(defaults) > 6 else ''})[/{TEXT_MUTED}]",
         default=True,
     )
+    if use_defaults is None:
+        return []
     if use_defaults:
         return defaults
 
@@ -482,7 +574,10 @@ def _prompt_sources() -> list[str]:
         label = f"  [{i:>2}] {src}"
         if default_yes:
             label += f" [{TEXT_MUTED}](default)[/{TEXT_MUTED}]"
-        if Confirm.ask(label, default=default_yes):
+        result = confirm_with_escape(label, default=default_yes)
+        if result is None:
+            return []
+        if result:
             selected.append(src)
 
     return selected
