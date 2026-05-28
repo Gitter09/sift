@@ -7,8 +7,7 @@ ensure_numba_cache_dir()
 
 from umap import UMAP
 import hdbscan
-from sift.models.feedback import FeedbackItem
-from sift.models.cluster import ClusterResult
+from sift.models import ClusterResult, FeedbackItem
 from sift.config import ClusteringConfig
 
 logger = logging.getLogger(__name__)

@@ -1,6 +1,6 @@
 from sift.config import ProductProfileConfig, RelevanceConfig, Settings
-from sift.models.feedback import FeedbackItem
-from sift.models.product_context import build_product_context
+from sift.models import FeedbackItem
+from sift.models import build_product_context
 from sift.pipeline.relevance import RelevanceFilter
 
 

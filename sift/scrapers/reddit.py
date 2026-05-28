@@ -3,7 +3,7 @@ import logging
 import praw
 from typing import List
 from datetime import datetime
-from sift.models.feedback import FeedbackItem
+from sift.models import FeedbackItem
 from sift.scrapers.base import BaseScraper
 from sift.config import RedditConfig
 from sift.pipeline.rate_limiter import PrawRateMonitor

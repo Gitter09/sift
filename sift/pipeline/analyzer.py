@@ -3,7 +3,7 @@ import re
 import time
 from typing import List
 from openai import OpenAI
-from sift.models.cluster import ClusterResult
+from sift.models import ClusterResult
 from sift.config import LLMConfig
 from sift.pipeline.llm_client import LLMRequestOptions, create_chat_completion
 from sift.pipeline.llm_json import log_parse_debug, parse_json_object

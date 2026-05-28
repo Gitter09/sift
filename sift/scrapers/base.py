@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, List, Optional
 
-from sift.models.feedback import FeedbackItem
+from sift.models import FeedbackItem
 
 if TYPE_CHECKING:
     from sift.pipeline.resolver.models import SourceRef

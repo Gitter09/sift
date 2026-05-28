@@ -25,7 +25,7 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from sift.models.report import ProductReport, ComparisonReport
+from sift.models import ProductReport, ComparisonReport
 from sift.pipeline.report_generator import (
     generate_markdown_report,
     generate_comparison_markdown,

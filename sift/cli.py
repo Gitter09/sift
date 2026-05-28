@@ -15,9 +15,12 @@ from sift.scrapers.factory import (
 from sift.pipeline.dedup import DedupFilter
 from sift.pipeline.relevance import RelevanceFilter
 from sift.pipeline.report_generator import save_reports
-from sift.models.feedback import FeedbackItem
-from sift.models.product_context import build_product_context
-from sift.models.report import ProductReport, ComparisonReport
+from sift.models import (
+    ComparisonReport,
+    FeedbackItem,
+    ProductReport,
+    build_product_context,
+)
 
 from sift.ui.display import (
     console,

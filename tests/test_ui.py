@@ -5,9 +5,12 @@ import io
 import pytest
 from rich.console import Console
 
-from sift.models.feedback import FeedbackItem
-from sift.models.cluster import ClusterResult
-from sift.models.report import ProductReport, ComparisonReport
+from sift.models import (
+    ClusterResult,
+    ComparisonReport,
+    FeedbackItem,
+    ProductReport,
+)
 from sift.config import Settings
 
 

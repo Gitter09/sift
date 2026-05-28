@@ -1,7 +1,7 @@
 import logging
 from typing import List, Dict
 from openai import OpenAI
-from sift.models.report import ProductReport, ComparisonReport
+from sift.models import ProductReport, ComparisonReport
 from sift.config import LLMConfig
 from sift.pipeline.llm_client import LLMRequestOptions, create_chat_completion
 from sift.pipeline.llm_json import log_parse_debug, parse_json_object

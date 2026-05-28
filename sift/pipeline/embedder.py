@@ -2,7 +2,7 @@ import logging
 import numpy as np
 from typing import List
 from sentence_transformers import SentenceTransformer
-from sift.models.feedback import FeedbackItem
+from sift.models import FeedbackItem
 from sift.config import ClusteringConfig
 
 logger = logging.getLogger(__name__)

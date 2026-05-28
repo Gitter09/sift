@@ -1,6 +1,5 @@
 import numpy as np
-from sift.models.feedback import FeedbackItem
-from sift.models.cluster import ClusterResult
+from sift.models import ClusterResult, FeedbackItem
 from sift.config import ClusteringConfig
 from sift.pipeline.embedder import Embedder
 from sift.pipeline.clusterer import Clusterer

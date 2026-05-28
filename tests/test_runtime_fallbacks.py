@@ -7,9 +7,7 @@ import httpx
 from openai import BadRequestError
 
 from sift.config import LLMConfig
-from sift.models.cluster import ClusterResult
-from sift.models.feedback import FeedbackItem
-from sift.models.report import ProductReport
+from sift.models import ClusterResult, FeedbackItem, ProductReport
 from sift.pipeline.analyzer import Analyzer
 from sift.pipeline.comparator import Comparator
 from sift.pipeline.http_client import BrowserFetcher, HttpResponse

@@ -4,8 +4,7 @@ from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from sift.config import RelevanceConfig
-from sift.models.feedback import FeedbackItem
-from sift.models.product_context import ProductContext
+from sift.models import FeedbackItem, ProductContext
 
 logger = logging.getLogger(__name__)
 

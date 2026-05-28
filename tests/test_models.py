@@ -1,9 +1,12 @@
 import json
 import hashlib
 from datetime import datetime
-from sift.models.feedback import FeedbackItem
-from sift.models.cluster import ClusterResult
-from sift.models.report import ProductReport, ComparisonReport
+from sift.models import (
+    ClusterResult,
+    ComparisonReport,
+    FeedbackItem,
+    ProductReport,
+)
 
 
 def test_feedback_item_to_dict():

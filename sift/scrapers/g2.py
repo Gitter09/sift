@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests as curl_requests
 
 from sift.config import G2Config
-from sift.models.feedback import FeedbackItem
+from sift.models import FeedbackItem
 from sift.pipeline.http_client import (
     CurlCffiSession,
     BrowserFetcher,

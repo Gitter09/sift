@@ -24,7 +24,7 @@ from sift.config import (
     SupportForumsConfig,
     YouTubeConfig,
 )
-from sift.models.feedback import FeedbackItem
+from sift.models import FeedbackItem
 from sift.pipeline.http_client import (
     CurlCffiSession,
     BrowserFetcher,
