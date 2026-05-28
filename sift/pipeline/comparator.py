@@ -1,10 +1,13 @@
 import logging
-from typing import List, Dict
-from openai import OpenAI
-from sift.models import ProductReport, ComparisonReport
+from typing import Dict, List
+
+from sift.models import ComparisonReport, ProductReport
 from sift.config import LLMConfig
-from sift.pipeline.llm_client import LLMRequestOptions, create_chat_completion
-from sift.pipeline.llm_json import log_parse_debug, parse_json_object
+from sift.pipeline._llm_base import (
+    BaseLLMPipeline,
+    clean_string,
+    normalize_string_list,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,56 +51,18 @@ RULES
 - Return only the JSON object."""
 
 
-REPAIR_JSON_PROMPT = """TASK
-Convert this model response into one valid JSON object matching the schema.
-
-SCHEMA
-{schema}
-
-MODEL RESPONSE
-{raw}
-
-RULES
-- Preserve the intended meaning when possible.
-- Return only the corrected JSON object."""
+_COMPARISON_SCHEMA = """{
+  "shared_pain_points": ["shared issue 1", "shared issue 2"],
+  "unique_pain_points": {
+    "Product Name": ["unique issue 1", "unique issue 2"]
+  },
+  "competitive_insights": "3-4 sentence strategic comparison insight"
+}"""
 
 
-class Comparator:
-    def __init__(self, config: LLMConfig):
-        self.client = None
-        self.model = config.model
-        self.temperature = config.temperature
-        self.max_tokens = config.max_tokens
-        self._unavailable_reason = ""
-        self._warned_unavailable = False
-
-        api_key = (config.api_key or "").strip()
-        if not api_key:
-            self._unavailable_reason = "LLM API key is not configured"
-            return
-
-        try:
-            self.client = OpenAI(
-                api_key=api_key,
-                base_url=config.base_url,
-            )
-        except Exception as exc:
-            self._unavailable_reason = f"LLM client setup failed: {exc}"
-
-    def _call_llm(self, prompt: str) -> str:
-        if self.client is None:
-            raise RuntimeError(self._unavailable_reason or "LLM client is unavailable")
-        response = create_chat_completion(
-            self.client,
-            self.model,
-            [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            LLMRequestOptions(self.temperature, self.max_tokens),
-            logger,
-        )
-        return (response.choices[0].message.content or "").strip()
+class Comparator(BaseLLMPipeline):
+    SYSTEM_PROMPT = SYSTEM_PROMPT
+    FALLBACK_NOUN = "comparison"
 
     def compare(self, reports: Dict[str, ProductReport]) -> ComparisonReport:
         products = list(reports.keys())
@@ -120,7 +85,7 @@ class Comparator:
 
         try:
             raw = self._call_llm(prompt)
-            result = self._parse_or_repair(raw)
+            result = self._parse_or_repair(raw, "comparison", _COMPARISON_SCHEMA)
             normalized = _normalize_comparison_result(result, products)
             return ComparisonReport(
                 products=products,
@@ -137,22 +102,6 @@ class Comparator:
                 exc,
             )
             return self._fallback_comparison(products, reports, "LLM call failed")
-
-    def _parse_or_repair(self, raw: str) -> dict:
-        try:
-            return parse_json_object(raw, logger, "comparison")
-        except Exception as exc:
-            log_parse_debug(logger, "comparison", raw, exc)
-
-        repair_prompt = REPAIR_JSON_PROMPT.format(schema=_COMPARISON_SCHEMA, raw=raw)
-        repaired = self._call_llm(repair_prompt)
-        return parse_json_object(repaired, logger, "comparison repair")
-
-    def _warn_unavailable_once(self) -> None:
-        if self._warned_unavailable:
-            return
-        logger.warning("%s; using fallback comparison.", self._unavailable_reason)
-        self._warned_unavailable = True
 
     @staticmethod
     def _fallback_comparison(
@@ -179,34 +128,15 @@ class Comparator:
         )
 
 
-_COMPARISON_SCHEMA = """{
-  "shared_pain_points": ["shared issue 1", "shared issue 2"],
-  "unique_pain_points": {
-    "Product Name": ["unique issue 1", "unique issue 2"]
-  },
-  "competitive_insights": "3-4 sentence strategic comparison insight"
-}"""
-
-
-def _clean_string(value: object) -> str:
-    return value.strip() if isinstance(value, str) else ""
-
-
-def _normalize_string_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
-
-
 def _normalize_comparison_result(result: dict, products: List[str]) -> dict:
     raw_unique = result.get("unique_pain_points")
     raw_unique = raw_unique if isinstance(raw_unique, dict) else {}
     unique = {
-        product: _normalize_string_list(raw_unique.get(product))
+        product: normalize_string_list(raw_unique.get(product))
         for product in products
     }
     return {
-        "shared_pain_points": _normalize_string_list(result.get("shared_pain_points")),
+        "shared_pain_points": normalize_string_list(result.get("shared_pain_points")),
         "unique_pain_points": unique,
-        "competitive_insights": _clean_string(result.get("competitive_insights")),
+        "competitive_insights": clean_string(result.get("competitive_insights")),
     }
