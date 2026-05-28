@@ -102,7 +102,10 @@ class AppStoreScraper(RequestsScraper):
         return "app_store"
 
     def scrape(self, product_name: str) -> List[FeedbackItem]:
-        app_id = self.config.app_ids.get(product_name)
+        app_id = (
+            (self.source_ref.identifier if self.source_ref else None)
+            or self.config.app_ids.get(product_name)
+        )
         if not app_id:
             logger.info("App Store app ID not configured for '%s', skipping.", product_name)
             return []
@@ -149,7 +152,10 @@ class PlayStoreScraper(RequestsScraper):
         return "play_store"
 
     def scrape(self, product_name: str) -> List[FeedbackItem]:
-        package_name = self.config.package_names.get(product_name)
+        package_name = (
+            (self.source_ref.identifier if self.source_ref else None)
+            or self.config.package_names.get(product_name)
+        )
         if not package_name:
             logger.info("Play Store package name not configured for '%s', skipping.", product_name)
             return []
@@ -329,7 +335,10 @@ class GitHubIssuesScraper(RequestsScraper):
         if self.config.token:
             headers["Authorization"] = f"Bearer {self.config.token}"
 
-        repos = self.config.repos.get(product_name, [])
+        repos = list(self.config.repos.get(product_name, []))
+        if not repos and self.source_ref:
+            # Resolver gave us a single owner/repo — wrap it for _scrape_repos.
+            repos = [self.source_ref.identifier]
         if repos:
             return self._scrape_repos(product_name, repos, headers)
         return self._search_all_github(product_name, headers)
@@ -389,21 +398,29 @@ class GitHubIssuesScraper(RequestsScraper):
 
 _PH_GRAPHQL_URL = "https://api.producthunt.com/v2/api/graphql"
 
-_PH_SEARCH_QUERY = """
-query($q: String!) {
-  posts(first: 5, search: $q, order: RANKING) {
-    edges {
-      node {
-        name
-        slug
-        tagline
-        comments(first: 20) {
-          edges {
-            node {
-              id
-              body
-            }
-          }
+# PH API v2 has no full-text search on `posts` and no `reviews` type —
+# only `Comment`. We look up the launch post by slug and pull its
+# discussion thread. Reviews proper are only available via the web
+# page, which the __NEXT_DATA__ fallback handles.
+_PH_POST_QUERY = """
+query($slug: String!, $first: Int!) {
+  post(slug: $slug) {
+    id
+    name
+    slug
+    tagline
+    description
+    url
+    votesCount
+    commentsCount
+    comments(first: $first, order: VOTES_COUNT) {
+      edges {
+        node {
+          id
+          body
+          votesCount
+          createdAt
+          url
         }
       }
     }
@@ -420,88 +437,205 @@ class ProductHuntScraper(RequestsScraper):
             use_playwright=config.use_playwright_fallback,
         )
         self.config = config
+        self._access_token: Optional[str] = None
 
     @property
     def source_name(self) -> str:
         return "product_hunt"
 
     def scrape(self, product_name: str) -> List[FeedbackItem]:
-        if self.config.developer_token:
+        if self.config.client_id and self.config.client_secret:
             items = self._scrape_via_api(product_name)
             if items:
                 return items
             logger.warning("Product Hunt API returned no results for '%s', falling back to HTML", product_name)
         return self._scrape_via_html(product_name)
 
-    def _scrape_via_api(self, product_name: str) -> List[FeedbackItem]:
-        headers = {
-            "Authorization": f"Bearer {self.config.developer_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
+    def _get_access_token(self, force_refresh: bool = False) -> Optional[str]:
+        """Mint and cache a client-credentials bearer token.
+
+        Uses PH's OAuth 2.0 client-credentials flow, which grants read
+        access to public endpoints only — no user context, safe to ship
+        with the app. Token is cached on the instance and only refreshed
+        on 401 (or when ``force_refresh`` is set).
+        """
+        if self._access_token and not force_refresh:
+            return self._access_token
+        payload = {
+            "client_id": self.config.client_id,
+            "client_secret": self.config.client_secret,
+            "grant_type": "client_credentials",
         }
-        payload = {"query": _PH_SEARCH_QUERY, "variables": {"q": product_name}}
-        data = self._post_json(_PH_GRAPHQL_URL, payload, headers=headers)
+        data = self._post_json("https://api.producthunt.com/v2/oauth/token", payload)
+        token = data.get("access_token") if isinstance(data, dict) else None
+        if not token:
+            logger.warning("Product Hunt: failed to obtain client-credentials token")
+            return None
+        self._access_token = token
+        return token
+
+    def _scrape_via_api(self, product_name: str) -> List[FeedbackItem]:
+        token = self._get_access_token()
+        if not token:
+            return []
+        slug = (
+            (self.source_ref.identifier if self.source_ref else None)
+            or self.config.slugs.get(product_name)
+            or product_name.lower().replace(" ", "-")
+        )
+        payload = {
+            "query": _PH_POST_QUERY,
+            "variables": {"slug": slug, "first": min(50, self.config.max_items)},
+        }
+        data = self._post_ph_graphql(payload, token)
+        if data is None:
+            token = self._get_access_token(force_refresh=True)
+            if not token:
+                return []
+            data = self._post_ph_graphql(payload, token)
         if not isinstance(data, dict):
             return []
+        if data.get("errors"):
+            logger.warning("Product Hunt GraphQL errors for slug '%s': %s", slug, data["errors"])
+            return []
 
-        items: List[FeedbackItem] = []
-        posts = data.get("data", {}).get("posts", {}).get("edges", [])
-        for edge in posts:
-            node = edge.get("node", {})
-            post_name = node.get("name", "")
-            slug = node.get("slug", "")
-            tagline = node.get("tagline", "")
-            post_url = f"https://www.producthunt.com/posts/{slug}" if slug else None
-
-            # Include the tagline as a feedback item
-            if tagline and len(tagline) >= 20:
-                items.append(FeedbackItem(
-                    source=self.source_name,
-                    product=product_name,
-                    text=f"{post_name}\n\n{tagline}".strip(),
-                    url=post_url,
-                    metadata={"slug": slug, "type": "tagline"},
-                ))
-
-            for comment_edge in node.get("comments", {}).get("edges", []):
-                body = (comment_edge.get("node") or {}).get("body", "")
-                if len(body) < 20:
-                    continue
-                items.append(FeedbackItem(
-                    source=self.source_name,
-                    product=product_name,
-                    text=body,
-                    url=post_url,
-                    metadata={"slug": slug, "type": "comment"},
-                ))
-                if len(items) >= self.config.max_items:
-                    return items
-
-        logger.info("Product Hunt API: collected %d items for '%s'", len(items), product_name)
-        return items
-
-    def _scrape_via_html(self, product_name: str) -> List[FeedbackItem]:
-        slug = self.config.slugs.get(product_name, product_name.lower().replace(" ", "-"))
-        url = f"https://www.producthunt.com/products/{slug}"
-        soup = self._get_html(url, headers={"User-Agent": "Mozilla/5.0"})
-        if not soup:
+        post = (data.get("data") or {}).get("post")
+        if not post:
+            logger.info("Product Hunt: no post found for slug '%s'", slug)
             return []
 
         items: List[FeedbackItem] = []
-        for element in soup.select("[data-test*='comment'], article, div[class*='comment']"):
-            text = element.get_text(" ", strip=True)
-            if len(text) < 30 or product_name.lower() not in text.lower():
+        post_name = post.get("name", "")
+        post_url = f"https://www.producthunt.com/posts/{slug}"
+        tagline = post.get("tagline", "")
+        description = post.get("description", "")
+
+        if tagline and len(tagline) >= 20:
+            items.append(FeedbackItem(
+                source=self.source_name,
+                product=product_name,
+                text=f"{post_name}\n\n{tagline}".strip(),
+                url=post_url,
+                metadata={"slug": slug, "type": "tagline"},
+            ))
+        if description and len(description) >= 20:
+            items.append(FeedbackItem(
+                source=self.source_name,
+                product=product_name,
+                text=description,
+                url=post_url,
+                metadata={"slug": slug, "type": "description"},
+            ))
+
+        for edge in (post.get("comments") or {}).get("edges", []):
+            node = edge.get("node") or {}
+            body = node.get("body", "")
+            if len(body) < 20:
                 continue
             items.append(FeedbackItem(
                 source=self.source_name,
                 product=product_name,
-                text=text,
-                url=url,
-                metadata={"slug": slug},
+                text=body,
+                url=node.get("url") or post_url,
+                date=_parse_datetime(node.get("createdAt")),
+                metadata={
+                    "slug": slug,
+                    "type": "comment",
+                    "votes_count": node.get("votesCount"),
+                },
             ))
             if len(items) >= self.config.max_items:
                 break
+
+        logger.info("Product Hunt API: collected %d items for '%s'", len(items), product_name)
         return items
+
+    def _post_ph_graphql(self, payload: dict, token: str) -> Optional[Any]:
+        """POST a GraphQL query. Returns None on 401 so the caller can refresh."""
+        self.rate_limiter.wait()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        try:
+            resp = self._curl_session._session.post(
+                _PH_GRAPHQL_URL, json=payload, headers=headers, timeout=20
+            )
+        except Exception as e:
+            logger.warning("Product Hunt GraphQL request failed: %s", e)
+            return {}
+        if resp.status_code == 401:
+            return None
+        try:
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.warning("Product Hunt GraphQL HTTP %s: %s", resp.status_code, e)
+            return {}
+
+    def _scrape_via_html(self, product_name: str) -> List[FeedbackItem]:
+        # Product Hunt is a Next.js SPA — selectors against the raw HTML
+        # return nothing because comments hydrate client-side. Instead,
+        # extract __NEXT_DATA__ (the server-embedded JSON Next.js ships
+        # with every page) and walk it for review/comment nodes.
+        slug = (
+            (self.source_ref.identifier if self.source_ref else None)
+            or self.config.slugs.get(product_name)
+            or product_name.lower().replace(" ", "-")
+        )
+        items: List[FeedbackItem] = []
+        seen_texts: set[str] = set()
+
+        for path in (f"/products/{slug}/reviews", f"/products/{slug}"):
+            url = f"https://www.producthunt.com{path}"
+            soup = self._get_html(url, headers={"User-Agent": "Mozilla/5.0"})
+            if not soup:
+                continue
+
+            title = (soup.title.string or "") if soup.title else ""
+            if "just a moment" in title.lower() or soup.find(id="challenge-stage"):
+                logger.warning(
+                    "Product Hunt: Cloudflare challenge intercepted %s — "
+                    "HTML fallback needs a stealth browser (camoufox / patchright) "
+                    "or a paid unblocker. Configure PH slugs and rely on the API instead.",
+                    url,
+                )
+                continue
+
+            payload = self._extract_next_data(soup)
+            if payload is None:
+                logger.debug("Product Hunt: no __NEXT_DATA__ on %s", url)
+                continue
+
+            for text, node_url, metadata in _walk_ph_feedback(payload, slug):
+                if len(text) < 20 or text in seen_texts:
+                    continue
+                seen_texts.add(text)
+                items.append(FeedbackItem(
+                    source=self.source_name,
+                    product=product_name,
+                    text=text,
+                    url=node_url or url,
+                    rating=metadata.pop("rating", None),
+                    metadata={"slug": slug, **metadata},
+                ))
+                if len(items) >= self.config.max_items:
+                    logger.info("Product Hunt HTML: collected %d items for '%s'", len(items), product_name)
+                    return items
+
+        logger.info("Product Hunt HTML: collected %d items for '%s'", len(items), product_name)
+        return items
+
+    @staticmethod
+    def _extract_next_data(soup: BeautifulSoup) -> Optional[Any]:
+        tag = soup.find("script", id="__NEXT_DATA__")
+        if not tag or not tag.string:
+            return None
+        try:
+            return json.loads(tag.string)
+        except json.JSONDecodeError:
+            return None
 
 
 class SearchPageScraper(RequestsScraper):
@@ -635,6 +769,60 @@ class DevToScraper(RequestsScraper):
         return "dev_to"
 
     def scrape(self, product_name: str) -> List[FeedbackItem]:
+        items: List[FeedbackItem] = []
+
+        # Preferred path: resolver gave us a tag → use Dev.to's documented
+        # articles API, which is structured and reliable.
+        if self.source_ref and self.source_ref.identifier:
+            tag = self.source_ref.identifier
+            tag_url = f"https://dev.to/api/articles?tag={quote_plus(tag)}&per_page={self.config.max_items}"
+            data = self._get_json(tag_url)
+            for article in data or []:
+                title = article.get("title", "")
+                description = article.get("description") or ""
+                text = f"{title}\n\n{description}".strip()
+                if len(text) < 20:
+                    continue
+                items.append(FeedbackItem(
+                    source=self.source_name,
+                    product=product_name,
+                    text=text,
+                    url=article.get("url"),
+                    date=_parse_datetime(article.get("published_at")),
+                    metadata={"tag_list": article.get("tag_list", []), "via": "tag"},
+                ))
+                if len(items) >= self.config.max_items:
+                    break
+
+            # Also pull resolver-supplied article URLs (Brave site-search hits)
+            # — they may not carry the tag but match the product name directly.
+            for art_url in (self.source_ref.payload.get("article_urls") or [])[:5]:
+                if len(items) >= self.config.max_items:
+                    break
+                slug = art_url.rstrip("/").split("/")[-1]
+                api_url = f"https://dev.to/api/articles/{quote_plus(slug)}"
+                detail = self._get_json(api_url)
+                if not isinstance(detail, dict):
+                    continue
+                title = detail.get("title", "")
+                description = detail.get("description") or ""
+                text = f"{title}\n\n{description}".strip()
+                if len(text) < 20:
+                    continue
+                items.append(FeedbackItem(
+                    source=self.source_name,
+                    product=product_name,
+                    text=text,
+                    url=detail.get("url"),
+                    date=_parse_datetime(detail.get("published_at")),
+                    metadata={"tag_list": detail.get("tag_list", []), "via": "article_url"},
+                ))
+
+            logger.info("Dev.to: collected %d articles via tag '%s'", len(items), tag)
+            return items
+
+        # Fallback: legacy text-search endpoint (often empty, but kept for
+        # users without a resolver configured).
         url = (
             "https://dev.to/search/feed_content"
             f"?per_page={self.config.max_items}"
@@ -642,7 +830,6 @@ class DevToScraper(RequestsScraper):
             "&content_type=article"
         )
         data = self._get_json(url)
-        items: List[FeedbackItem] = []
         for result in (data or {}).get("result", []):
             title = result.get("title", "")
             description = result.get("description") or result.get("body_preview") or ""
@@ -655,7 +842,7 @@ class DevToScraper(RequestsScraper):
                 product=product_name,
                 text=text,
                 url=f"https://dev.to{path}" if path else None,
-                metadata={"tag_list": result.get("tag_list", [])},
+                metadata={"tag_list": result.get("tag_list", []), "via": "search"},
             ))
             if len(items) >= self.config.max_items:
                 break
@@ -754,6 +941,57 @@ def _parse_datetime(value: Optional[str]) -> Optional[datetime]:
 
 def _html_to_text(value: str) -> str:
     return re.sub(r"\s+", " ", BeautifulSoup(value, "html.parser").get_text(" ", strip=True)).strip()
+
+
+_PH_TEXT_KEYS = ("body", "bodyHtml", "comment", "text", "review", "reviewBody")
+_PH_FEEDBACK_TYPENAMES = {"Comment", "Review", "ProductReview", "Thread"}
+
+
+def _walk_ph_feedback(
+    node: Any, slug: str
+) -> Iterable[tuple[str, Optional[str], dict]]:
+    """Yield (text, url, metadata) tuples from a Product Hunt __NEXT_DATA__ tree.
+
+    PH's Next.js payload nests reviews and comments under varying keys
+    depending on the page. Rather than hard-coding a path that will break
+    on their next deploy, walk the tree and emit any dict that looks like
+    a feedback node — identified by __typename or by having a body-like
+    field plus an id.
+    """
+    if isinstance(node, dict):
+        typename = node.get("__typename")
+        text = ""
+        for key in _PH_TEXT_KEYS:
+            value = node.get(key)
+            if isinstance(value, str) and value.strip():
+                text = _html_to_text(value) if "<" in value else value.strip()
+                break
+
+        looks_like_feedback = (
+            typename in _PH_FEEDBACK_TYPENAMES
+            or (text and any(k in node for k in ("id", "createdAt", "votesCount", "rating")))
+        )
+        if looks_like_feedback and text:
+            node_id = node.get("id") or node.get("slug")
+            url = None
+            if typename == "Comment" and node_id:
+                url = f"https://www.producthunt.com/products/{slug}/reviews?comment={node_id}"
+            elif typename in {"Review", "ProductReview"} and node_id:
+                url = f"https://www.producthunt.com/products/{slug}/reviews/{node_id}"
+            metadata = {"type": (typename or "feedback").lower()}
+            rating = node.get("rating")
+            if isinstance(rating, (int, float)):
+                metadata["rating"] = float(rating)
+            votes = node.get("votesCount")
+            if isinstance(votes, int):
+                metadata["votes_count"] = votes
+            yield text, url, metadata
+
+        for value in node.values():
+            yield from _walk_ph_feedback(value, slug)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk_ph_feedback(item, slug)
 
 
 def _walk_hn_comments(children: list) -> Iterable[tuple[str, str]]:

@@ -119,6 +119,12 @@ class G2Scraper(BaseScraper):
         return None
 
     def _get_product_url(self, product_name: str) -> Optional[str]:
+        # Resolver-provided URL bypasses G2's own search entirely — that
+        # search page is itself Cloudflare-gated, so when the resolver
+        # has done the lookup via Brave we can jump straight to the
+        # product page.
+        if self.source_ref and self.source_ref.url:
+            return self.source_ref.url
         slug = product_name.lower().replace(" ", "-")
         search_url = f"https://www.g2.com/search?query={product_name}"
         headers = {"User-Agent": _G2_USER_AGENT}

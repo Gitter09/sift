@@ -87,6 +87,24 @@ _OPTIONAL_KEYS = [
         "default": "",
         "password": True,
     },
+    {
+        "key": "PRODUCT_HUNT_CLIENT_ID",
+        "label": "Product Hunt Client ID (API Key)",
+        "default": "",
+        "password": False,
+    },
+    {
+        "key": "PRODUCT_HUNT_CLIENT_SECRET",
+        "label": "Product Hunt Client Secret (API Secret)",
+        "default": "",
+        "password": True,
+    },
+    {
+        "key": "BRAVE_SEARCH_API_KEY",
+        "label": "Brave Search API Key (api.search.brave.com — free tier 2k/mo)",
+        "default": "",
+        "password": True,
+    },
 ]
 
 

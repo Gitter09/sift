@@ -109,12 +109,15 @@ def run_analyze(
 
     total_scrape_tasks = len(products) * len(sources)
     with ScrapeProgress(total=total_scrape_tasks) as scrape_progress:
+        from sift.scrapers.factory import resolve_source_refs
         for product in products:
             feedback: list[FeedbackItem] = []
             source_counts: dict[str, int] = {}
+            resolved_refs = resolve_source_refs(settings, product, sources)
             for src in sources:
                 scraper = get_scraper(src, settings)
                 if scraper:
+                    scraper.set_source_ref(resolved_refs.get(src))
                     scrape_progress.update_desc(f"Scraping {src} › {product}")
                     try:
                         items = scraper.scrape(product)
@@ -261,10 +264,13 @@ def run_scrape(
     dedup = DedupFilter()
     relevance = RelevanceFilter(settings.relevance)
     feedback: list[FeedbackItem] = []
+    from sift.scrapers.factory import resolve_source_refs
+    resolved_refs = resolve_source_refs(settings, product, sources)
     with ScrapeProgress(total=len(sources)) as scrape_progress:
         for src in sources:
             scraper = get_scraper(src, settings)
             if scraper:
+                scraper.set_source_ref(resolved_refs.get(src))
                 scrape_progress.update_desc(f"Scraping {src} › {product}")
                 try:
                     items = scraper.scrape(product)
@@ -314,15 +320,10 @@ def init_cmd(config: str) -> None:
 
     Run this after installing Sift to create the configuration files you need.
     """
-    from sift.config_defaults import generate_default_config
-
-    created = generate_default_config(config)
-    if created:
-        click.echo(f"Created default config at: {config}")
-    else:
-        click.echo(f"Config file already exists at: {config} — skipping.")
-
+    from sift.ui.config_wizard import run_config_wizard
     from sift.ui.setup import run_setup_wizard
+
+    run_config_wizard(config)
     run_setup_wizard()
 
 
@@ -384,6 +385,132 @@ def scrape_cmd(
         output=output,
         verbose=verbose,
     )
+
+
+@main.command("resolve")
+@click.argument("product")
+@click.option("--source", "-s", multiple=True, help="Source(s) to resolve. Default: all.")
+@click.option("--config", "-c", default="config.yaml", help="Path to config file.")
+@click.option("--url", default=None, help="Optional homepage URL hint to skip search-based enrichment.")
+@_verbose_option
+@click.pass_context
+def resolve_cmd(
+    ctx: click.Context,
+    product: str,
+    source: tuple[str, ...],
+    config: str,
+    url: Optional[str],
+    verbose: bool,
+) -> None:
+    """Dry-run resolution: print the ProductProfile and per-source SourceRef.
+
+    Use this to debug why a product isn't being found, or to demo what the
+    resolver auto-derives without running a full scrape.
+    """
+    from sift.scrapers.factory import build_resolver_pipeline
+
+    settings = load_settings(config)
+    setup_logging(settings, verbose=verbose)
+    pipeline = build_resolver_pipeline(settings)
+    if pipeline is None:
+        click.echo("Resolver disabled or BRAVE_SEARCH_API_KEY not set. Edit config.yaml or .env.")
+        return
+
+    sources = list(source) if source else list(pipeline.resolvers.keys())
+    profile = pipeline.get_profile(product, hint_url=url)
+    click.echo(f"\nProductProfile for '{product}':")
+    click.echo(f"  homepage     : {profile.homepage}")
+    click.echo(f"  site_name    : {profile.site_name}")
+    click.echo(f"  category     : {profile.category}")
+    click.echo(f"  description  : {profile.description[:200]}")
+    click.echo(f"  enricher_used: {profile.enricher_used}")
+    click.echo(f"  snippets     : {len(profile.search_snippets)}")
+    click.echo("\nResolved source refs:")
+    for src in sources:
+        ref = pipeline.resolve_source(profile, src)
+        if ref is None:
+            click.echo(f"  {src:<16} : (none)")
+        else:
+            click.echo(
+                f"  {src:<16} : {ref.identifier}  "
+                f"[conf={ref.confidence:.2f} via={ref.resolver_used}]"
+            )
+            if ref.url:
+                click.echo(f"  {'':<16}   {ref.url}")
+
+
+@main.group("cache")
+def cache_grp() -> None:
+    """Inspect and manage the resolver cache."""
+
+
+@cache_grp.command("show")
+@click.option("--product", "-p", default=None, help="Show only this product's entries.")
+@click.option("--config", "-c", default="config.yaml", help="Path to config file.")
+def cache_show_cmd(product: Optional[str], config: str) -> None:
+    """Print cached profiles and source refs."""
+    from sift.pipeline.resolver import ResolverCache
+
+    settings = load_settings(config)
+    cache = ResolverCache(settings.resolver.cache_path, ttl_days=settings.resolver.cache_ttl_days)
+    if product:
+        entry = cache.get_profile(product)
+        if not entry:
+            click.echo(f"No cached profile for '{product}'.")
+            return
+        click.echo(f"Profile [{entry.resolver_used}, resolved_at={entry.resolved_at.isoformat()}]")
+        for k, v in entry.value.to_dict().items():
+            if k == "search_snippets":
+                click.echo(f"  {k}: {len(v)} snippets")
+            elif k == "raw_metadata":
+                click.echo(f"  {k}: {len(v)} fields")
+            else:
+                click.echo(f"  {k}: {v}")
+        click.echo("\nRefs:")
+        for row in cache.list_refs_for(product):
+            r = row["ref"]
+            click.echo(
+                f"  {row['source']:<16} → {r.identifier}  "
+                f"[conf={row['confidence']:.2f} via={row['resolver_used']}]"
+            )
+        return
+
+    rows = cache.list_profiles()
+    if not rows:
+        click.echo("Cache is empty.")
+        return
+    click.echo(f"Cached profiles ({len(rows)}):")
+    for row in rows:
+        click.echo(f"  {row['name']:<30} {row['resolved_at']}  [{row['resolver_used']}]")
+
+
+@cache_grp.command("clear")
+@click.option("--product", "-p", default=None, help="Clear only this product (all sources).")
+@click.option("--source", "-s", default=None, help="When used with --product, clear only this source's ref.")
+@click.option("--all", "clear_all", is_flag=True, help="Wipe the entire cache.")
+@click.option("--config", "-c", default="config.yaml", help="Path to config file.")
+def cache_clear_cmd(
+    product: Optional[str], source: Optional[str], clear_all: bool, config: str
+) -> None:
+    """Invalidate cached resolutions when the resolver got it wrong."""
+    from sift.pipeline.resolver import ResolverCache
+
+    settings = load_settings(config)
+    cache = ResolverCache(settings.resolver.cache_path, ttl_days=settings.resolver.cache_ttl_days)
+
+    if clear_all:
+        cache.clear_all()
+        click.echo("Cleared entire resolver cache.")
+        return
+    if not product:
+        click.echo("Provide --product, or --all.")
+        return
+    if source:
+        n = cache.clear_ref(product, source)
+        click.echo(f"Removed {n} ref for '{product}' / '{source}'.")
+    else:
+        n = cache.clear_profile(product)
+        click.echo(f"Removed {n} cache entries for '{product}'.")
 
 
 # ---------------------------------------------------------------------------

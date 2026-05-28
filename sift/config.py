@@ -145,8 +145,11 @@ class ProductHuntConfig:
     max_requests_per_minute: int = 20
     # Fall back to Playwright (real Chromium) when curl_cffi gets 403
     use_playwright_fallback: bool = True
-    # Optional: get a free token at producthunt.com/v2/oauth/applications
-    developer_token: str = ""
+    # Optional: register an app at producthunt.com/oauth/applications.
+    # Sift uses these for the OAuth 2.0 client-credentials flow — no user
+    # context, only public data (posts, comments, reviews). Safe to ship.
+    client_id: str = ""
+    client_secret: str = ""
 
 
 @dataclass
@@ -226,6 +229,17 @@ class LoggingConfig:
 
 
 @dataclass
+class ResolverConfig:
+    enabled: bool = True
+    cache_path: str = "~/.config/sift/resolver_cache.db"
+    cache_ttl_days: int = 30
+    use_llm_disambiguator: bool = True
+    use_sitemap_fallback: bool = True
+    sitemap_cache_path: str = "~/.config/sift/sitemap_index.db"
+    brave_api_key: str = ""
+
+
+@dataclass
 class Settings:
     sources: SourcesConfig = field(default_factory=SourcesConfig)
     products: Dict[str, ProductProfileConfig] = field(default_factory=dict)
@@ -247,6 +261,7 @@ class Settings:
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
+    resolver: ResolverConfig = field(default_factory=ResolverConfig)
     max_feedback_per_source: int = 100
 
 
@@ -376,7 +391,8 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             request_delay=product_hunt_raw.get("request_delay", 2.0),
             max_requests_per_minute=product_hunt_raw.get("max_requests_per_minute", 20),
             use_playwright_fallback=product_hunt_raw.get("use_playwright_fallback", True),
-            developer_token=os.getenv("PRODUCT_HUNT_TOKEN", product_hunt_raw.get("developer_token", "")),
+            client_id=os.getenv("PRODUCT_HUNT_CLIENT_ID", product_hunt_raw.get("client_id", "")),
+            client_secret=os.getenv("PRODUCT_HUNT_CLIENT_SECRET", product_hunt_raw.get("client_secret", "")),
         ),
         support_forums=SupportForumsConfig(
             search_urls=support_forums_raw.get("search_urls", []),
@@ -432,6 +448,26 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             max_tokens=llm_raw.get("max_tokens", 8000),
         ),
         max_feedback_per_source=int(os.getenv("MAX_FEEDBACK_PER_SOURCE", "100")),
+        resolver=ResolverConfig(
+            enabled=yaml_data.get("resolver", {}).get("enabled", True),
+            cache_path=yaml_data.get("resolver", {}).get(
+                "cache_path", "~/.config/sift/resolver_cache.db"
+            ),
+            cache_ttl_days=int(yaml_data.get("resolver", {}).get("cache_ttl_days", 30)),
+            use_llm_disambiguator=yaml_data.get("resolver", {}).get(
+                "use_llm_disambiguator", True
+            ),
+            use_sitemap_fallback=yaml_data.get("resolver", {}).get(
+                "use_sitemap_fallback", True
+            ),
+            sitemap_cache_path=yaml_data.get("resolver", {}).get(
+                "sitemap_cache_path", "~/.config/sift/sitemap_index.db"
+            ),
+            brave_api_key=os.getenv(
+                "BRAVE_SEARCH_API_KEY",
+                yaml_data.get("resolver", {}).get("brave_api_key", ""),
+            ),
+        ),
         logging=LoggingConfig(
             level=yaml_data.get("logging", {}).get("level", "ERROR"),
             format=yaml_data.get("logging", {}).get(

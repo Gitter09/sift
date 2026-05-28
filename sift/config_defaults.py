@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 
+import yaml
+
 
 DEFAULT_CONFIG_YAML = """\
 # Sift Configuration
@@ -155,7 +157,24 @@ llm:
 logging:
     level: "ERROR"
     format: "%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+
+resolver:
+    # Auto-discovers source-specific IDs (PH slug, G2 page, GitHub repo, etc.)
+    # from a bare product name. Falls back to your manual product configs
+    # (e.g. product_hunt.slugs, github_issues.repos) when the resolver
+    # can't figure it out or you want to override.
+    enabled: true
+    cache_path: "~/.config/sift/resolver_cache.db"
+    cache_ttl_days: 30
+    use_llm_disambiguator: true
+    use_sitemap_fallback: true
+    sitemap_cache_path: "~/.config/sift/sitemap_index.db"
+    # Set via BRAVE_SEARCH_API_KEY env var. Free tier: 2,000 queries/month.
+    # Register at https://api.search.brave.com/
 """
+
+
+DEFAULT_CONFIG: dict = yaml.safe_load(DEFAULT_CONFIG_YAML)
 
 
 def generate_default_config(path: str = "config.yaml") -> bool:

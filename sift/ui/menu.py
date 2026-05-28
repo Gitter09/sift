@@ -258,8 +258,12 @@ def prompt_exit_choice() -> str:
             elif key == 'down':
                 current = (current + 1) % len(_EXIT_CHOICES)
             elif key == 'enter':
+                sys.stdout.write(f'\033[{rendered_lines}A\r\033[J')
+                sys.stdout.flush()
                 return _EXIT_CHOICES[current][0]
             elif key == 'escape':
+                sys.stdout.write(f'\033[{rendered_lines}A\r\033[J')
+                sys.stdout.flush()
                 return "cancel"
             else:
                 continue

@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 from sift.scrapers.base import BaseScraper
 from sift.scrapers.reddit import RedditScraper
 from sift.scrapers.g2 import G2Scraper
@@ -121,3 +121,94 @@ def is_source_configured(source: str, settings: Settings) -> bool:
         return bool(settings.g2.proxy_url)
     # These sources work without any configuration (auto-discover or open APIs)
     return source in {"hacker_news", "github_issues", "product_hunt", "stack_overflow", "dev_to"}
+
+
+_resolver_pipeline_singleton = None
+
+
+def build_resolver_pipeline(settings: Settings):
+    """Construct (and cache) the ResolverPipeline for the current Settings.
+
+    Returns ``None`` when the resolver is disabled or no search backend
+    is available — callers should fall through to manual config in that
+    case.
+    """
+    global _resolver_pipeline_singleton
+    if not settings.resolver.enabled:
+        return None
+    if _resolver_pipeline_singleton is not None:
+        return _resolver_pipeline_singleton
+
+    from sift.pipeline.resolver import (
+        BraveSearchClient,
+        LLMDisambiguator,
+        ResolverPipeline,
+        SitemapIndex,
+    )
+
+    if not settings.resolver.brave_api_key:
+        logger.info("Resolver enabled but BRAVE_SEARCH_API_KEY not set; resolver inactive.")
+        return None
+
+    primary = BraveSearchClient(settings.resolver.brave_api_key)
+    disambiguator = (
+        LLMDisambiguator(settings.llm)
+        if settings.resolver.use_llm_disambiguator
+        else None
+    )
+    fallback = (
+        SitemapIndex(settings.resolver.sitemap_cache_path)
+        if settings.resolver.use_sitemap_fallback
+        else None
+    )
+    _resolver_pipeline_singleton = ResolverPipeline.build(
+        cache_path=settings.resolver.cache_path,
+        cache_ttl_days=settings.resolver.cache_ttl_days,
+        primary_search=primary,
+        disambiguator=disambiguator,
+        fallback_search=fallback,
+    )
+    return _resolver_pipeline_singleton
+
+
+def resolve_source_refs(
+    settings: Settings, product_name: str, sources: List[str]
+) -> Dict[str, object]:
+    """Resolve SourceRefs for the given sources, honoring manual overrides.
+
+    For each source, manual config (e.g. ``app_store.app_ids[product]``)
+    is preferred when present; the resolver only fills gaps. Returns a
+    ``{source: SourceRef}`` mapping; missing sources are simply absent.
+    """
+    pipeline = build_resolver_pipeline(settings)
+    if pipeline is None:
+        return {}
+    product_cfg = settings.products.get(product_name)
+    hint_url = product_cfg.website if product_cfg else None
+    refs: Dict[str, object] = {}
+    for source in sources:
+        if _has_manual_override(source, product_name, settings):
+            continue
+        try:
+            ref = pipeline.resolve(product_name, [source], hint_url=hint_url).get(source)
+        except Exception as e:
+            logger.warning("Resolver error for %s/%s: %s", product_name, source, e)
+            ref = None
+        if ref is not None:
+            refs[source] = ref
+    return refs
+
+
+def _has_manual_override(source: str, product_name: str, settings: Settings) -> bool:
+    if source == "product_hunt":
+        return bool(settings.product_hunt.slugs.get(product_name))
+    if source == "g2":
+        # G2 has no per-product slug map; resolver always fills.
+        return False
+    if source == "app_store":
+        return bool(settings.app_store.app_ids.get(product_name))
+    if source == "play_store":
+        return bool(settings.play_store.package_names.get(product_name))
+    if source == "github_issues":
+        return bool(settings.github_issues.repos.get(product_name))
+    return False
