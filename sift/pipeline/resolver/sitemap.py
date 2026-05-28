@@ -41,10 +41,10 @@ class SitemapIndex(SearchClient):
     """Search backend backed by per-host sitemap indexes in SQLite."""
 
     def __init__(self, db_path: str, ttl_days: int = 14):
-        self.db_path = db_path
+        self.db_path = str(Path(db_path).expanduser())
         self.ttl = timedelta(days=ttl_days)
         self._http = CurlCffiSession()
-        Path(db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
     @property
