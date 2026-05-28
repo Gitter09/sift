@@ -194,11 +194,6 @@ class Analyzer:
 
         return cluster
 
-    def analyze_clusters(self, clusters: List[ClusterResult]) -> List[ClusterResult]:
-        for cluster in clusters:
-            self.analyze_cluster(cluster)
-        return clusters
-
     def generate_overall_insights(self, product: str, clusters: List[ClusterResult]) -> dict:
         if self.client is None:
             self._warn_unavailable_once()

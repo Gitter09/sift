@@ -79,13 +79,6 @@ class BrowserFetcher:
     # Public API
     # ------------------------------------------------------------------
 
-    def fetch_curl(
-        self, url: str, *, headers: dict | None = None, timeout: int = 15
-    ) -> Optional[curl_requests.Response]:
-        """Fetch a page via curl_cffi (Tier 1).  Callers must handle rate
-        limiting *before* invoking this method."""
-        return self._curl.get(url, headers=headers, timeout=timeout)
-
     def fetch_playwright(self, url: str) -> Optional[HttpResponse]:
         """Fetch a page via a real Chromium browser (Tier 2).
 

@@ -73,34 +73,3 @@ ICON_SELECT = "›"
 ICON_BULLET = "→"
 ICON_DIAMOND = "◈"
 ICON_DOT = "·"
-
-# ── Typography Helpers ──────────────────────────────────────────────────
-
-def heading(text: str, color: str = VIOLET) -> str:
-    """Render a small all-caps heading with tracked spacing."""
-    return f"[bold {color}]{text}[/bold {color}]"
-
-
-def muted(text: str) -> str:
-    """Subdued secondary text for metadata and hints."""
-    return f"[{TEXT_SECONDARY}]{text}[/{TEXT_SECONDARY}]"
-
-
-def dim(text: str) -> str:
-    """Very subdued text for footers and disabled states."""
-    return f"[{TEXT_MUTED}]{text}[/{TEXT_MUTED}]"
-
-
-def accent(text: str, color: str = VIOLET) -> str:
-    """Emphasized text in the given accent color."""
-    return f"[bold {color}]{text}[/bold {color}]"
-
-
-def source(text: str) -> str:
-    """A source name rendered to stand out slightly from body text."""
-    return f"[{SOURCE_COLOR}]{text}[/{SOURCE_COLOR}]"
-
-
-def tagline() -> str:
-    """The brand tagline, centered and diamond-prefixed."""
-    return f"[{VIOLET}]◈  Scrape · Cluster · Analyze  ◈[/{VIOLET}]"

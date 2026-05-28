@@ -71,9 +71,6 @@ __all__ = [
     "ScrapeProgress", "PipelineProgress",
 ]
 
-# Keep legacy SEVERITY_ICONS for anything that still references it
-SEVERITY_ICONS = SEVERITY_DOTS
-
 SIFT_BANNER = (
     "███████╗    ██╗    ███████╗    ████████╗\n"
     "██╔════╝    ██║    ██╔════╝    ╚══██╔══╝\n"
