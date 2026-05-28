@@ -1,7 +1,7 @@
 # Sift
 
 <p align="center">
-  <img src="static/sift-banner.png" alt="Sift Banner" width="600">
+  <img src="static/sift-banner.png" alt="Sift Banner" width="800">
 </p>
 
 > Scrape user feedback from public product channels, cluster complaints with ML, and generate AI-powered product insights — all from your terminal.
