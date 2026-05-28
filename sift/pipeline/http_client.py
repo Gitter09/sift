@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from bs4 import BeautifulSoup
 from curl_cffi import requests as curl_requests
 
 from sift.pipeline.rate_limiter import RateLimiter
@@ -78,6 +79,41 @@ class BrowserFetcher:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def fetch_html(
+        self,
+        url: str,
+        *,
+        headers: dict | None = None,
+        timeout: int = 20,
+        source_label: str = "fetch",
+        **kwargs,
+    ) -> Optional[BeautifulSoup]:
+        """Two-tier HTML fetch: rate-limit, try curl_cffi, fall back to Playwright.
+
+        Returns a parsed ``BeautifulSoup`` on success, or ``None`` if both
+        tiers fail. This is the common case for plain GETs that don't
+        need site-specific retry/backoff logic; callers that do (e.g.
+        :class:`sift.scrapers.g2.G2Scraper`) drive curl + playwright
+        manually.
+        """
+        self._rate_limiter.wait()
+
+        try:
+            resp = self._curl.get(url, headers=headers, timeout=timeout, **kwargs)
+            if resp is not None:
+                resp.raise_for_status()
+                return BeautifulSoup(resp.text, "html.parser")
+        except Exception as e:
+            logger.debug("%s curl_cffi fetch failed for %s: %s", source_label, url, e)
+
+        pw_resp = self.fetch_playwright(url)
+        if pw_resp is not None:
+            logger.info("%s Playwright fallback succeeded for %s", source_label, url)
+            return BeautifulSoup(pw_resp.text, "html.parser")
+
+        logger.warning("%s failed to fetch HTML from %s", source_label, url)
+        return None
 
     def fetch_playwright(self, url: str) -> Optional[HttpResponse]:
         """Fetch a page via a real Chromium browser (Tier 2).
@@ -192,3 +228,14 @@ class BrowserFetcher:
         if self._curl_session is None:
             self._curl_session = CurlCffiSession()
         return self._curl_session
+
+    @property
+    def curl_session(self) -> CurlCffiSession:
+        """Public accessor for the underlying curl_cffi session.
+
+        Callers that need raw JSON/POST/proxied access (and don't want
+        the curl→playwright two-tier behavior of ``fetch_html``) can
+        share this session so a single TLS-impersonation handle is
+        reused across all GETs from the scraper.
+        """
+        return self._curl

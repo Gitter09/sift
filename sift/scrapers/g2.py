@@ -7,11 +7,7 @@ from curl_cffi import requests as curl_requests
 
 from sift.config import G2Config
 from sift.models import FeedbackItem
-from sift.pipeline.http_client import (
-    CurlCffiSession,
-    BrowserFetcher,
-    HttpResponse,
-)
+from sift.pipeline.http_client import BrowserFetcher, HttpResponse
 from sift.pipeline.rate_limiter import RateLimiter
 from sift.scrapers.base import BaseScraper
 
@@ -35,7 +31,6 @@ class G2Scraper(BaseScraper):
 
     def __init__(self, config: G2Config):
         self.config = config
-        self._curl_session = CurlCffiSession()
         self.rate_limiter = RateLimiter(
             max_requests_per_minute=config.max_requests_per_minute,
             jitter_range=config.jitter_range,
@@ -47,6 +42,7 @@ class G2Scraper(BaseScraper):
             self.rate_limiter,
             use_playwright=config.use_playwright_fallback,
         )
+        self._curl_session = self._browser_fetcher.curl_session
 
     @property
     def source_name(self) -> str:

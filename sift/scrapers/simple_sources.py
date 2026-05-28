@@ -25,11 +25,7 @@ from sift.config import (
     YouTubeConfig,
 )
 from sift.models import FeedbackItem
-from sift.pipeline.http_client import (
-    CurlCffiSession,
-    BrowserFetcher,
-    HttpResponse,
-)
+from sift.pipeline.http_client import BrowserFetcher
 from sift.pipeline.rate_limiter import RateLimiter
 from sift.scrapers.base import BaseScraper
 
@@ -38,7 +34,6 @@ logger = logging.getLogger(__name__)
 
 class RequestsScraper(BaseScraper):
     def __init__(self, max_requests_per_minute: int = 20, request_delay: float = 1.0, use_playwright: bool = True):
-        self._curl_session = CurlCffiSession()
         jitter = max(0.1, request_delay)
         self.rate_limiter = RateLimiter(
             max_requests_per_minute=max_requests_per_minute,
@@ -46,6 +41,7 @@ class RequestsScraper(BaseScraper):
             max_retries=2,
         )
         self._browser_fetcher = BrowserFetcher(self.rate_limiter, use_playwright=use_playwright)
+        self._curl_session = self._browser_fetcher.curl_session
 
     def _get_json(self, url: str, **kwargs) -> Optional[Any]:
         self.rate_limiter.wait()
@@ -71,25 +67,9 @@ class RequestsScraper(BaseScraper):
             return None
 
     def _get_html(self, url: str, **kwargs) -> Optional[BeautifulSoup]:
-        self.rate_limiter.wait()
-
-        # Tier 1: curl_cffi
-        try:
-            resp = self._curl_session.get(url, timeout=20, **kwargs)
-            if resp is not None:
-                resp.raise_for_status()
-                return BeautifulSoup(resp.text, "html.parser")
-        except Exception as e:
-            logger.debug("%s curl_cffi fetch failed for %s: %s", self.source_name, url, e)
-
-        # Tier 2: Playwright fallback
-        pw_resp = self._browser_fetcher.fetch_playwright(url)
-        if pw_resp is not None:
-            logger.info("%s Playwright fallback succeeded for %s", self.source_name, url)
-            return BeautifulSoup(pw_resp.text, "html.parser")
-
-        logger.warning("%s failed to fetch HTML from %s", self.source_name, url)
-        return None
+        return self._browser_fetcher.fetch_html(
+            url, source_label=self.source_name, **kwargs
+        )
 
 
 class AppStoreScraper(RequestsScraper):
