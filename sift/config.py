@@ -3,7 +3,7 @@ import logging
 import sys
 import yaml
 from dotenv import load_dotenv
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Dict, List
 
 load_dotenv()
@@ -46,10 +46,32 @@ class ProductProfileConfig:
 
 
 @dataclass
-class RelevanceConfig:
+class DisambiguatorConfig:
+    """Tuning for the three-layer content disambiguator.
+
+    Layer 1 = heuristic scoring (relevance.py), Layer 2 = embedding anchor
+    similarity (anchor.py), Layer 3 = LLM yes/no gate (llm_gate.py).
+    """
+
     enabled: bool = True
-    threshold: float = 0.45
-    min_items_before_relaxing: int = 3
+    # Layer 1 — heuristic scoring
+    alias_weight: float = 0.55             # body alias match
+    identifier_weight: float = 0.75        # repo/slug/app-id match in url/metadata
+    auto_negative_penalty: float = 0.30    # per common-word construction (ambiguous names)
+    source_type_bonus: float = 0.15        # dev source + dev-tool category alignment
+    structural_context_bonus: float = 0.20 # alias in url/metadata/title
+    heuristic_hard_reject: float = 0.10    # below this, drop before embedding
+    safety_net_min_items: int = 3          # keep top-K by score if zero survive
+    # Layer 2 — anchor similarity
+    anchor_weight_normal: float = 0.4      # anchor weight for non-ambiguous products
+    anchor_weight_ambiguous: float = 0.6   # anchor weight for ambiguous products
+    anchor_min_similarity: float = 0.35    # ambiguous: reject below this anchor score
+    # Layer 3 — LLM gate
+    llm_gate_enabled: bool = True
+    llm_gate_keep_threshold: float = 0.6   # combined > this -> auto-keep
+    llm_gate_reject_threshold: float = 0.3 # combined < this -> auto-reject
+    llm_gate_max_items: int = 50           # cap items routed through the LLM
+    llm_gate_batch_size: int = 5           # items per LLM call
 
 
 @dataclass
@@ -243,7 +265,7 @@ class ResolverConfig:
 class Settings:
     sources: SourcesConfig = field(default_factory=SourcesConfig)
     products: Dict[str, ProductProfileConfig] = field(default_factory=dict)
-    relevance: RelevanceConfig = field(default_factory=RelevanceConfig)
+    disambiguator: DisambiguatorConfig = field(default_factory=DisambiguatorConfig)
     reddit: RedditConfig = field(default_factory=RedditConfig)
     g2: G2Config = field(default_factory=G2Config)
     app_store: AppStoreConfig = field(default_factory=AppStoreConfig)
@@ -265,6 +287,31 @@ class Settings:
     max_feedback_per_source: int = 100
 
 
+def _build_disambiguator_config(raw: dict) -> DisambiguatorConfig:
+    """Overlay the ``disambiguator:`` YAML block onto dataclass defaults.
+
+    Only keys present in YAML override defaults; types are coerced to match
+    the dataclass field (bool/int/float) so a stray string in YAML can't
+    silently disable a threshold.
+    """
+    cfg = DisambiguatorConfig()
+    if not isinstance(raw, dict):
+        return cfg
+    for f in fields(cfg):
+        if f.name not in raw:
+            continue
+        value = raw[f.name]
+        default = getattr(cfg, f.name)
+        if isinstance(default, bool):          # bool before int (bool is an int subclass)
+            value = bool(value)
+        elif isinstance(default, int):
+            value = int(value)
+        elif isinstance(default, float):
+            value = float(value)
+        setattr(cfg, f.name, value)
+    return cfg
+
+
 def load_settings(config_path: str = "config.yaml") -> Settings:
     yaml_data = {}
     if os.path.exists(config_path):
@@ -273,7 +320,7 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
 
     sources_raw = yaml_data.get("sources", {})
     products_raw = yaml_data.get("products", {})
-    relevance_raw = yaml_data.get("relevance", {})
+    disambiguator_raw = yaml_data.get("disambiguator", {})
     reddit_raw = yaml_data.get("reddit", {})
     g2_raw = yaml_data.get("g2", {})
     app_store_raw = yaml_data.get("app_store", {})
@@ -320,11 +367,7 @@ def load_settings(config_path: str = "config.yaml") -> Settings:
             for name, profile in products_raw.items()
             if isinstance(profile, dict)
         },
-        relevance=RelevanceConfig(
-            enabled=relevance_raw.get("enabled", True),
-            threshold=float(relevance_raw.get("threshold", 0.45)),
-            min_items_before_relaxing=relevance_raw.get("min_items_before_relaxing", 3),
-        ),
+        disambiguator=_build_disambiguator_config(disambiguator_raw),
         reddit=RedditConfig(
             client_id=os.getenv("REDDIT_CLIENT_ID", reddit_raw.get("client_id", "")),
             client_secret=os.getenv("REDDIT_CLIENT_SECRET", reddit_raw.get("client_secret", "")),

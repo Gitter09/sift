@@ -11,23 +11,26 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv, dotenv_values
-from rich.console import Console
-from rich.panel import Panel
-from rich.rule import Rule
-from rich.text import Text
 
 from sift.config_defaults import generate_default_config
+from sift.ui._terminal import console, read_line_with_escape
+from sift.ui._wizard import (
+    print_discarded_panel,
+    print_saved_panel,
+    print_section_rule,
+    print_welcome_panel,
+    prompt_exit_choice,
+)
 from sift.ui.theme import (
-    AMBER,
-    EMERALD,
-    ICON_DONE,
-    ICON_DOT,
-    TEXT_MUTED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
     VIOLET,
 )
-console = Console()
+
+_WELCOME_MESSAGE = (
+    "Welcome to Sift. Let's configure your API keys.\n"
+    "Press Enter to accept defaults. Press Esc anytime to save or discard and exit."
+)
 
 # Absolute path to the .env file in the project root (or cwd).
 _ENV_PATH = Path(os.getenv("SIFT_ENV_PATH", Path.cwd() / ".env"))
@@ -115,29 +118,8 @@ def is_configured() -> bool:
     return bool(value)
 
 
-def _print_welcome() -> None:
-    console.print()
-    console.print(
-        Panel.fit(
-            Text(
-                "Welcome to Sift. Let's configure your API keys.\n"
-                "Press Enter to accept defaults. Press Esc anytime to save or discard and exit.",
-                style=f"bold {TEXT_PRIMARY}",
-            ),
-            border_style=VIOLET,
-        )
-    )
-    console.print()
-
-
-def _section_rule(title: str, color: str) -> None:
-    console.print(Rule(f"[bold {color}]{title}[/bold {color}]", style=TEXT_MUTED, align="left"))
-    console.print()
-
-
 def _ask_entry(entry: dict, existing: dict[str, Optional[str]], required_section: bool) -> Optional[str]:
     """Prompt for a single key. Returns the user's value, or ``None`` if Esc."""
-    from sift.ui.menu import read_line_with_escape  # lazy: avoid circular import
     key = entry["key"]
     default = existing.get(key) or entry["default"]
     is_password = entry.get("password", False)
@@ -186,51 +168,42 @@ def run_setup_wizard() -> None:
     if _ENV_PATH.exists():
         existing = dict(dotenv_values(_ENV_PATH))
 
-    _print_welcome()
+    print_welcome_panel(_WELCOME_MESSAGE)
 
     new_values: dict[str, str] = {}
     entries = _build_entries()
+
+    def _render_section(section: str) -> None:
+        if section == "required":
+            print_section_rule("REQUIRED", VIOLET)
+        else:
+            console.print()
+            print_section_rule("OPTIONAL", TEXT_SECONDARY)
 
     i = 0
     last_section: Optional[str] = None
     while i < len(entries):
         section, entry = entries[i]
         if section != last_section:
-            if section == "required":
-                _section_rule("REQUIRED", VIOLET)
-            else:
-                console.print()
-                _section_rule("OPTIONAL", TEXT_SECONDARY)
+            _render_section(section)
             last_section = section
 
         value = _ask_entry(entry, existing, required_section=(section == "required"))
 
         if value is None:
             # Esc pressed — ask what to do.
-            from sift.ui.menu import prompt_exit_choice  # lazy: avoid circular import
             choice = prompt_exit_choice()
             if choice == "save":
                 console.print()
                 _save_env(new_values, existing)
                 return
             if choice == "discard":
-                console.print()
-                console.print(
-                    Panel(
-                        f"[bold {AMBER}]{ICON_DOT} Changes discarded.[/bold {AMBER}]\n"
-                        f"[{TEXT_SECONDARY}]Your .env was not modified.[/{TEXT_SECONDARY}]",
-                        border_style=AMBER,
-                    )
-                )
-                console.print()
+                print_discarded_panel(".env")
                 return
             # Cancel — re-render section header for context, then re-prompt
             # this same entry.
             console.print()
-            if section == "required":
-                _section_rule("REQUIRED", VIOLET)
-            else:
-                _section_rule("OPTIONAL", TEXT_SECONDARY)
+            _render_section(section)
             last_section = section
             continue
 
@@ -286,19 +259,7 @@ def _save_env(new_values: dict[str, str], existing: dict[str, Optional[str]]) ->
     _CONFIG_PATH = os.getenv("SIFT_CONFIG_PATH", "config.yaml")
     created_config = generate_default_config(_CONFIG_PATH)
 
+    lines = [f"Configuration saved to {_ENV_PATH}"]
     if created_config:
-        console.print(
-            Panel(
-                f"[bold {EMERALD}]{ICON_DONE} Configuration saved to {_ENV_PATH}[/bold {EMERALD}]\n"
-                f"[bold {EMERALD}]{ICON_DONE} Default config.yaml created at {_CONFIG_PATH}[/bold {EMERALD}]",
-                border_style=EMERALD,
-            )
-        )
-    else:
-        console.print(
-            Panel(
-                f"[bold {EMERALD}]{ICON_DONE} Configuration saved to {_ENV_PATH}[/bold {EMERALD}]",
-                border_style=EMERALD,
-            )
-        )
-    console.print()
+        lines.append(f"Default config.yaml created at {_CONFIG_PATH}")
+    print_saved_panel(lines)

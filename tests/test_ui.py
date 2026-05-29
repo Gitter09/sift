@@ -287,8 +287,8 @@ def test_setup_wizard_discard_does_not_write_env(tmp_path, monkeypatch):
     def fake_save_env(new_values, existing):
         save_calls.append(dict(new_values))
 
-    monkeypatch.setattr("sift.ui.menu.read_line_with_escape", fake_read_line)
-    monkeypatch.setattr("sift.ui.menu.prompt_exit_choice", lambda: "discard")
+    monkeypatch.setattr("sift.ui.setup.read_line_with_escape", fake_read_line)
+    monkeypatch.setattr("sift.ui.setup.prompt_exit_choice", lambda: "discard")
     monkeypatch.setattr(setup_mod, "_save_env", fake_save_env)
 
     setup_mod.run_setup_wizard()
@@ -317,8 +317,8 @@ def test_setup_wizard_save_persists_partial_values(tmp_path, monkeypatch):
     def fake_save_env(new_values, existing):
         save_calls.append(dict(new_values))
 
-    monkeypatch.setattr("sift.ui.menu.read_line_with_escape", fake_read_line)
-    monkeypatch.setattr("sift.ui.menu.prompt_exit_choice", lambda: "save")
+    monkeypatch.setattr("sift.ui.setup.read_line_with_escape", fake_read_line)
+    monkeypatch.setattr("sift.ui.setup.prompt_exit_choice", lambda: "save")
     monkeypatch.setattr(setup_mod, "_save_env", fake_save_env)
 
     setup_mod.run_setup_wizard()
@@ -342,8 +342,8 @@ def test_setup_wizard_cancel_resumes(tmp_path, monkeypatch):
         return next(answers)
 
     choices = iter(["cancel"])
-    monkeypatch.setattr("sift.ui.menu.read_line_with_escape", fake_read_line)
-    monkeypatch.setattr("sift.ui.menu.prompt_exit_choice", lambda: next(choices))
+    monkeypatch.setattr("sift.ui.setup.read_line_with_escape", fake_read_line)
+    monkeypatch.setattr("sift.ui.setup.prompt_exit_choice", lambda: next(choices))
 
     save_calls = []
 
@@ -357,3 +357,51 @@ def test_setup_wizard_cancel_resumes(tmp_path, monkeypatch):
     # Walked all the way through and saved at the end.
     assert len(save_calls) == 1
     assert save_calls[0].get("LLM_API_KEY") == "sk-resumed"
+
+
+# ---------------------------------------------------------------------------
+# Fix #4: EMA must NOT record a failed scrape's elapsed time
+# ---------------------------------------------------------------------------
+
+
+def test_scrape_progress_does_not_record_failed_scrape(monkeypatch):
+    """A scraper that raises inside `start_estimated(...)` must not pull the
+    timings EMA toward the (small) exception-path elapsed value."""
+    from sift.ui.display import ScrapeProgress
+
+    recorded: list[tuple[str, str, float]] = []
+
+    def fake_record(stage, key, elapsed):
+        recorded.append((stage, key, elapsed))
+
+    monkeypatch.setattr("sift.ui.timings.record", fake_record)
+
+    with ScrapeProgress(total=1) as progress:
+        with pytest.raises(RuntimeError):
+            with progress.start_estimated("g2"):
+                raise RuntimeError("simulated scraper failure")
+        progress.advance()
+
+    assert recorded == []  # failure path must not poison the EMA
+
+
+def test_scrape_progress_records_successful_scrape(monkeypatch):
+    """Symmetric guard: success path must still record into the EMA."""
+    from sift.ui.display import ScrapeProgress
+
+    recorded: list[tuple[str, str, float]] = []
+
+    def fake_record(stage, key, elapsed):
+        recorded.append((stage, key, elapsed))
+
+    monkeypatch.setattr("sift.ui.timings.record", fake_record)
+
+    with ScrapeProgress(total=1) as progress:
+        with progress.start_estimated("g2"):
+            pass  # immediate success
+        progress.advance()
+
+    assert len(recorded) == 1
+    assert recorded[0][0] == "scrape"
+    assert recorded[0][1] == "g2"
+    assert recorded[0][2] >= 0.0

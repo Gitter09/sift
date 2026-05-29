@@ -171,6 +171,26 @@ def build_resolver_pipeline(settings: Settings):
     return _resolver_pipeline_singleton
 
 
+def get_cached_profile(settings: Settings, product_name: str):
+    """Return the cached resolver ``ProductProfile`` for a product, or None.
+
+    Reads the resolver cache directly (no enrichment / network) so the content
+    disambiguator can build a rich Layer 2 anchor for free on a cache hit — the
+    profile was already computed during scraping. Returns None when the resolver
+    is disabled or the product was never resolved, in which case the anchor
+    falls back to the config-derived ProductContext.
+    """
+    pipeline = build_resolver_pipeline(settings)
+    if pipeline is None:
+        return None
+    try:
+        entry = pipeline.cache.get_profile(product_name)
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("Resolver cache read failed for '%s': %s", product_name, e)
+        return None
+    return entry.value if entry else None
+
+
 def resolve_source_refs(
     settings: Settings, product_name: str, sources: List[str]
 ) -> Dict[str, object]:

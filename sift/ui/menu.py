@@ -6,28 +6,27 @@ navigable menu to launch analysis, scraping, or reconfigure API keys.
 
 from __future__ import annotations
 
-import os
-import select
-import sys
-import termios
 import time
-import tty
 
 from dotenv import load_dotenv
-from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 
+from sift.ui._terminal import (
+    confirm_with_escape,
+    console,
+    cursor_up,
+    hide_cursor,
+    read_key,
+    read_line_with_escape,
+    show_cursor,
+)
 from sift.ui.display import print_large_banner, VERSION, _git_info
 from sift.ui.theme import (
-    ACCENT_COLOR,
     AMBER,
     CYAN,
-    EMERALD,
-    ICON_DONE,
     ICON_DOT,
     ICON_SELECT,
-    ROSE,
     TEXT_MUTED,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
@@ -36,8 +35,6 @@ from sift.ui.theme import (
 from sift.ui.setup import run_setup_wizard
 from sift.config import load_settings
 from sift.scrapers.factory import AVAILABLE_SOURCES, default_sources
-
-console = Console()
 
 _MENU_LABELS = [
     "Analyze a product",
@@ -48,231 +45,6 @@ _MENU_LABELS = [
 
 # Lines printed by _render_menu(): borderx2 + paddingx2 + items + hint
 _MENU_TOTAL_LINES = len(_MENU_LABELS) + 4 + 1
-
-
-def _read_key() -> str:
-    """Read one keypress from stdin in raw mode; recognizes arrow keys."""
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = os.read(fd, 1)
-        if ch == b'\x1b':
-            ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-            if ready:
-                ch2 = os.read(fd, 1)
-                if ch2 == b'[':
-                    ready2, _, _ = select.select([sys.stdin], [], [], 0.05)
-                    if ready2:
-                        ch3 = os.read(fd, 1)
-                        if ch3 == b'A':
-                            return 'up'
-                        if ch3 == b'B':
-                            return 'down'
-            return 'escape'
-        if ch in (b'\r', b'\n'):
-            return 'enter'
-        if ch == b'\x03':
-            raise KeyboardInterrupt
-        return ch.decode('utf-8', errors='replace')
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-
-def read_line_with_escape(
-    label: str,
-    default: str = "",
-    password: bool = False,
-    show_default: bool = True,
-) -> str | None:
-    """Render a Rich-styled prompt and read a line, returning None if Esc pressed.
-
-    Behaves like ``rich.prompt.Prompt.ask`` for the common case but intercepts
-    the Escape key and returns ``None`` so callers can offer a save/discard/
-    cancel dialog.
-
-    - ``default`` is returned when the user presses Enter on an empty buffer.
-    - ``password`` echoes ``*`` instead of the typed character.
-    - Backspace and Ctrl-C are handled; arrow-key escape sequences are
-      consumed so they don't accidentally trigger Esc-exit.
-    """
-    # Render the label (Rich markup ok) plus a default hint, mirroring
-    # Prompt.ask's visual style.
-    suffix = ""
-    if show_default and default:
-        suffix = f" [{TEXT_MUTED}]({default})[/{TEXT_MUTED}]"
-    console.print(f"{label}{suffix}[{TEXT_MUTED}]:[/{TEXT_MUTED}] ", end="")
-    sys.stdout.flush()
-
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    buf: list[str] = []
-    try:
-        tty.setraw(fd)
-        while True:
-            ch = os.read(fd, 1)
-            if ch == b'\x1b':
-                # Disambiguate bare Esc from arrow / function key sequences.
-                ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-                if ready:
-                    # Consume the rest of the escape sequence and ignore.
-                    _ = os.read(fd, 1)
-                    ready2, _, _ = select.select([sys.stdin], [], [], 0.05)
-                    if ready2:
-                        _ = os.read(fd, 1)
-                    continue
-                # Bare Esc — cancel.
-                sys.stdout.write("\r\n")
-                sys.stdout.flush()
-                return None
-            if ch in (b'\r', b'\n'):
-                sys.stdout.write("\r\n")
-                sys.stdout.flush()
-                value = "".join(buf)
-                return value if value else default
-            if ch == b'\x03':
-                raise KeyboardInterrupt
-            if ch in (b'\x7f', b'\x08'):
-                if buf:
-                    buf.pop()
-                    sys.stdout.write("\b \b")
-                    sys.stdout.flush()
-                continue
-            try:
-                decoded = ch.decode('utf-8')
-            except UnicodeDecodeError:
-                continue
-            if not decoded.isprintable():
-                continue
-            buf.append(decoded)
-            sys.stdout.write("*" if password else decoded)
-            sys.stdout.flush()
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-
-def confirm_with_escape(
-    label: str,
-    default: bool = True,
-) -> bool | None:
-    """Render a Rich-styled Yes/No confirm and return True/False, or None if Esc.
-
-    Mirrors ``rich.prompt.Confirm.ask`` but intercepts Esc to cancel back
-    to the main menu.
-
-    - ``default`` controls the capital letter: ``Y/n`` when True, ``y/N``
-      when False.
-    - Returns ``None`` when the user presses Escape.
-    """
-    yes_char = "Y" if default else "y"
-    no_char = "n" if default else "N"
-    suffix = f" [{TEXT_MUTED}]({yes_char}/{no_char})[/{TEXT_MUTED}]"
-    console.print(f"{label}{suffix}[{TEXT_MUTED}]:[/{TEXT_MUTED}] ", end="")
-    sys.stdout.flush()
-
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        while True:
-            ch = os.read(fd, 1)
-            if ch == b'\x1b':
-                ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-                if ready:
-                    _ = os.read(fd, 1)
-                    ready2, _, _ = select.select([sys.stdin], [], [], 0.05)
-                    if ready2:
-                        _ = os.read(fd, 1)
-                    continue
-                sys.stdout.write("\r\n")
-                sys.stdout.flush()
-                return None
-            if ch in (b'\r', b'\n'):
-                sys.stdout.write("\r\n")
-                sys.stdout.flush()
-                return default
-            if ch == b'\x03':
-                raise KeyboardInterrupt
-            if ch.lower() == b'y':
-                sys.stdout.write("y\r\n")
-                sys.stdout.flush()
-                return True
-            if ch.lower() == b'n':
-                sys.stdout.write("n\r\n")
-                sys.stdout.flush()
-                return False
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-
-_EXIT_CHOICES = [
-    ("save", "Save", "Persist what you've entered so far"),
-    ("discard", "Discard", "Throw away changes and return to menu"),
-    ("cancel", "Cancel", "Continue editing"),
-]
-
-
-def prompt_exit_choice() -> str:
-    """Render a Save/Discard/Cancel popup and return one of the choice keys.
-
-    Defaults the selection to **Cancel** so an accidental Enter is safe.
-    """
-    current = 2  # Cancel
-    rendered_lines = len(_EXIT_CHOICES) + 4 + 1  # panel borders + padding + hint
-
-    def render() -> None:
-        lines = []
-        for i, (_, label, desc) in enumerate(_EXIT_CHOICES):
-            if i == current:
-                lines.append(
-                    f"   [bold {CYAN}]{ICON_SELECT}  {label}[/bold {CYAN}]  "
-                    f"[{TEXT_MUTED}]{desc}[/{TEXT_MUTED}]"
-                )
-            else:
-                lines.append(
-                    f"      {label}  [{TEXT_MUTED}]{desc}[/{TEXT_MUTED}]"
-                )
-        console.print(
-            Panel(
-                "\n".join(lines),
-                title=f"[{AMBER}]Unsaved changes[/{AMBER}]",
-                title_align="center",
-                border_style=AMBER,
-                padding=(1, 2),
-            )
-        )
-        console.print(
-            f"  [{VIOLET}]↑ ↓[/{VIOLET}]  "
-            f"[{TEXT_MUTED}]navigate[/{TEXT_MUTED}]  {ICON_DOT}  "
-            f"enter  [{TEXT_SECONDARY}]select[/{TEXT_SECONDARY}]"
-        )
-
-    render()
-    sys.stdout.write('\033[?25l')
-    sys.stdout.flush()
-    try:
-        while True:
-            key = _read_key()
-            if key == 'up':
-                current = (current - 1) % len(_EXIT_CHOICES)
-            elif key == 'down':
-                current = (current + 1) % len(_EXIT_CHOICES)
-            elif key == 'enter':
-                sys.stdout.write(f'\033[{rendered_lines}A\r\033[J')
-                sys.stdout.flush()
-                return _EXIT_CHOICES[current][0]
-            elif key == 'escape':
-                sys.stdout.write(f'\033[{rendered_lines}A\r\033[J')
-                sys.stdout.flush()
-                return "cancel"
-            else:
-                continue
-            sys.stdout.write(f'\033[{rendered_lines}A\r')
-            sys.stdout.flush()
-            render()
-    finally:
-        sys.stdout.write('\033[?25h')
-        sys.stdout.flush()
 
 
 def _render_menu(current: int) -> None:
@@ -338,11 +110,10 @@ def run_main_menu() -> None:
 
             # Hide cursor only during arrow-key navigation, since the options
             # menu has nothing to type. Restore it before any text prompt.
-            sys.stdout.write('\033[?25l')
-            sys.stdout.flush()
+            hide_cursor()
             try:
                 while True:
-                    key = _read_key()
+                    key = read_key()
                     if key == 'up':
                         current = (current - 1) % len(_MENU_LABELS)
                     elif key == 'down':
@@ -357,12 +128,10 @@ def run_main_menu() -> None:
                     else:
                         continue
 
-                    sys.stdout.write(f'\033[{_MENU_TOTAL_LINES}A\r')
-                    sys.stdout.flush()
+                    cursor_up(_MENU_TOTAL_LINES)
                     _render_menu(current)
             finally:
-                sys.stdout.write('\033[?25h')
-                sys.stdout.flush()
+                show_cursor()
 
             if current == 3:  # Exit
                 console.print()
@@ -393,8 +162,7 @@ def run_main_menu() -> None:
                 time.sleep(1.2)
     finally:
         # Belt-and-suspenders: ensure cursor is visible if we exit unexpectedly.
-        sys.stdout.write('\033[?25h')
-        sys.stdout.flush()
+        show_cursor()
 
 
 # ---------------------------------------------------------------------------

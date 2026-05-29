@@ -81,7 +81,14 @@ class LLMDisambiguator:
             ),
         )
 
-        options = LLMRequestOptions(temperature=0.0, max_tokens=200)
+        # Cap disambiguator output: the reply is a one-line JSON object, so
+        # the full llm.max_tokens budget (often thousands) is wasted spend
+        # and on reasoning-capable models actively pulls long chains-of-thought.
+        options = LLMRequestOptions(
+            temperature=0.0,
+            max_tokens=min(512, self.config.max_tokens),
+        )
+        content = ""
         try:
             response = create_chat_completion(
                 self.client,
@@ -90,7 +97,24 @@ class LLMDisambiguator:
                 options,
                 logger,
             )
-            content = response.choices[0].message.content or ""
+            choice = response.choices[0]
+            content = choice.message.content or ""
+            if not content:
+                finish_reason = getattr(choice, "finish_reason", "unknown")
+                logger.warning(
+                    "LLMDisambiguator got empty content (finish_reason=%r); retrying without temperature",
+                    finish_reason,
+                )
+                # Some proxies silently return empty content for temperature=0.0 — retry once.
+                options._temperature_enabled = False
+                response = create_chat_completion(
+                    self.client,
+                    self.config.model,
+                    [{"role": "user", "content": prompt}],
+                    options,
+                    logger,
+                )
+                content = response.choices[0].message.content or ""
         except Exception as e:
             logger.warning("LLMDisambiguator call failed: %s", e)
             return max(candidates, key=lambda c: c.raw_score)

@@ -210,7 +210,14 @@ def print_config_summary(settings: Settings, sources: list[str]) -> None:
 
 
 class ScrapeProgress:
-    """Context manager showing a spinner + bar for the scraping phase."""
+    """Context manager showing a spinner + bar for the scraping phase.
+
+    The bar advances by one whole slot per ``(source, product)`` pair. Inside
+    a slot, ``start_estimated(source)`` drives the fill smoothly using the
+    EMA-backed expected duration in :mod:`sift.ui.timings`; ``advance()``
+    folds the observed duration back into the EMA so subsequent runs are
+    more accurate.
+    """
 
     def __init__(self, total: int | None = None):
         self._total = total
@@ -224,6 +231,9 @@ class ScrapeProgress:
             console=console,
         )
         self._task_id: TaskID | None = None
+        self._slot: int = 0
+        self._active_key: str | None = None
+        self._active_task: "EstimatedTask | None" = None
 
     def __enter__(self) -> "ScrapeProgress":
         self._progress.start()
@@ -243,13 +253,49 @@ class ScrapeProgress:
                 description=f"[{VIOLET}]{description}[/{VIOLET}]",
             )
 
+    def start_estimated(self, source: str) -> "EstimatedTask":
+        """Begin smoothly filling the current slot for ``source``.
+
+        Use as ``with scrape_progress.start_estimated(src): scraper.scrape(...)``.
+        """
+        from sift.ui._estimator import EstimatedTask
+        from sift.ui import timings
+
+        assert self._task_id is not None, "ScrapeProgress used outside `with`"
+        self._active_key = source
+        self._active_task = EstimatedTask(
+            self._progress,
+            self._task_id,
+            expected_seconds=timings.get("scrape", source),
+            start_completed=float(self._slot),
+        )
+        return self._active_task
+
     def advance(self, amount: int = 1) -> None:
-        if self._task_id is not None:
-            self._progress.advance(self._task_id, amount)
+        if self._task_id is None:
+            return
+        # If a slot just finished with an active estimator, fold the real
+        # duration into the EMA store so the next run uses it. Only on
+        # success — a scraper that raised after 0.5s shouldn't pull the
+        # learned duration toward 0.5s for a slot whose real cost is 60s.
+        if self._active_task is not None and self._active_key is not None:
+            if self._active_task.succeeded:
+                from sift.ui import timings
+
+                timings.record("scrape", self._active_key, self._active_task.elapsed)
+            self._active_task = None
+            self._active_key = None
+        self._slot += amount
+        self._progress.update(self._task_id, completed=float(self._slot))
 
 
 class PipelineProgress:
-    """Context manager showing a spinner + bar for pipeline stages."""
+    """Context manager showing a spinner + bar for pipeline stages.
+
+    Like :class:`ScrapeProgress`, but slots correspond to pipeline stages
+    (embedding, clustering, one per cluster analysed, insights). Each stage
+    has its own EMA key so the per-stage estimate improves over time.
+    """
 
     def __init__(self, total_stages: int = 4):
         self._total = total_stages
@@ -263,6 +309,9 @@ class PipelineProgress:
             console=console,
         )
         self._task_id: TaskID | None = None
+        self._slot: int = 0
+        self._active_key: str | None = None
+        self._active_task: "EstimatedTask | None" = None
 
     def __enter__(self) -> "PipelineProgress":
         self._progress.start()
@@ -286,9 +335,32 @@ class PipelineProgress:
         if self._task_id is not None:
             self._progress.update(self._task_id, total=total)
 
+    def start_estimated(self, stage_key: str) -> "EstimatedTask":
+        from sift.ui._estimator import EstimatedTask
+        from sift.ui import timings
+
+        assert self._task_id is not None, "PipelineProgress used outside `with`"
+        self._active_key = stage_key
+        self._active_task = EstimatedTask(
+            self._progress,
+            self._task_id,
+            expected_seconds=timings.get("pipeline", stage_key),
+            start_completed=float(self._slot),
+        )
+        return self._active_task
+
     def advance(self) -> None:
-        if self._task_id is not None:
-            self._progress.advance(self._task_id, 1)
+        if self._task_id is None:
+            return
+        if self._active_task is not None and self._active_key is not None:
+            if self._active_task.succeeded:
+                from sift.ui import timings
+
+                timings.record("pipeline", self._active_key, self._active_task.elapsed)
+            self._active_task = None
+            self._active_key = None
+        self._slot += 1
+        self._progress.update(self._task_id, completed=float(self._slot))
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +556,27 @@ def print_relevance_summary(total: int, rejected: int, kept: int, relaxed: bool 
     )
     console.print(
         f"[{TEXT_SECONDARY}]{kept} context-relevant items from {total} collected{reject_msg}.[/{TEXT_SECONDARY}]"
+    )
+
+
+def print_disambiguation_summary(collected: int, l1_stats, dstats) -> None:
+    """Per-layer breakdown of the three-layer content disambiguator."""
+    if collected == 0:
+        console.print(f"[{TEXT_SECONDARY}]No items collected before disambiguation.[/{TEXT_SECONDARY}]")
+        return
+
+    gate = ""
+    if dstats.gated or dstats.over_cap:
+        gate = f" [{ICON_DOT}] LLM gate {dstats.gate_yes}✓/{dstats.gate_no}✗"
+        if dstats.over_cap:
+            gate += f" ({dstats.over_cap} by score)"
+    safety = " (safety net)" if dstats.safety_net_triggered else ""
+    anchor = "anchor" if dstats.anchor_used else "heuristic-only"
+
+    console.print(
+        f"[{TEXT_SECONDARY}]{dstats.final_kept} product-relevant items from {collected} collected "
+        f"[{ICON_DOT}] L1 dropped {l1_stats.dropped} [{ICON_DOT}] {anchor} keep {dstats.auto_kept}"
+        f"/reject {dstats.auto_rejected}{gate}{safety}.[/{TEXT_SECONDARY}]"
     )
 
 

@@ -11,22 +11,21 @@ import os
 from typing import Any, Optional
 
 import yaml
-from rich.panel import Panel
-from rich.rule import Rule
-from rich.text import Text
 
 from sift.config_defaults import DEFAULT_CONFIG
+from sift.ui._terminal import console, read_line_with_escape
+from sift.ui._wizard import (
+    print_discarded_panel,
+    print_saved_panel,
+    print_section_rule,
+    print_welcome_panel,
+    prompt_exit_choice,
+)
 from sift.ui.theme import (
     AMBER,
-    EMERALD,
-    ICON_DONE,
     ICON_DOT,
-    TEXT_MUTED,
     TEXT_PRIMARY,
-    TEXT_SECONDARY,
-    VIOLET,
 )
-from sift.ui.setup import console  # reuse the shared Rich console
 
 
 # ---------------------------------------------------------------------------
@@ -285,22 +284,11 @@ def _print_welcome(path: str, existing: bool) -> None:
     )
     if existing:
         msg += f"\nExisting values from {path} are shown as defaults."
-    console.print()
-    console.print(
-        Panel.fit(Text(msg, style=f"bold {TEXT_PRIMARY}"), border_style=VIOLET)
-    )
-    console.print()
-
-
-def _section_rule(title: str) -> None:
-    console.print(Rule(f"[bold {VIOLET}]{title}[/bold {VIOLET}]", style=TEXT_MUTED, align="left"))
-    console.print()
+    print_welcome_panel(msg)
 
 
 def _ask_one(label: str, default_text: str, kind: str) -> Optional[Any]:
     """Prompt until parse succeeds. Returns parsed value, or None on Esc."""
-    from sift.ui.menu import read_line_with_escape
-
     pretty_label = f"  [{TEXT_PRIMARY}]{label}[/{TEXT_PRIMARY}]"
     while True:
         raw = read_line_with_escape(
@@ -343,7 +331,7 @@ def run_config_wizard(path: str = "config.yaml") -> None:
         if section != last_section:
             if last_section is not None:
                 console.print()
-            _section_rule(section)
+            print_section_rule(section)
             last_section = section
 
         current = _get_path(merged, p)
@@ -354,26 +342,17 @@ def run_config_wizard(path: str = "config.yaml") -> None:
         value = _ask_one(label, default_text, kind)
         if value is None:
             # Esc — Save / Discard / Cancel
-            from sift.ui.menu import prompt_exit_choice
             choice = prompt_exit_choice()
             if choice == "save":
                 console.print()
                 _save_config(merged, path, existed)
                 return
             if choice == "discard":
-                console.print()
-                console.print(
-                    Panel(
-                        f"[bold {AMBER}]{ICON_DOT} Changes discarded.[/bold {AMBER}]\n"
-                        f"[{TEXT_SECONDARY}]Your config.yaml was not modified.[/{TEXT_SECONDARY}]",
-                        border_style=AMBER,
-                    )
-                )
-                console.print()
+                print_discarded_panel("config.yaml")
                 return
             # cancel → re-draw section header and re-prompt same entry
             console.print()
-            _section_rule(section)
+            print_section_rule(section)
             last_section = section
             continue
 
@@ -398,15 +377,7 @@ def _save_config(merged: dict, path: str, existed: bool) -> None:
         f.write(header)
         f.write(body)
 
-    extra = (
-        f"\n[{TEXT_SECONDARY}]Previous version saved to {path}.bak[/{TEXT_SECONDARY}]"
-        if existed
-        else ""
-    )
-    console.print(
-        Panel(
-            f"[bold {EMERALD}]{ICON_DONE} Configuration saved to {path}[/bold {EMERALD}]{extra}",
-            border_style=EMERALD,
-        )
-    )
-    console.print()
+    lines = [f"Configuration saved to {path}"]
+    if existed:
+        lines.append(f"Previous version saved to {path}.bak")
+    print_saved_panel(lines)

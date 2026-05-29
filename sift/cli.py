@@ -13,7 +13,7 @@ from sift.scrapers.factory import (
     is_source_configured,
 )
 from sift.pipeline.dedup import DedupFilter
-from sift.pipeline.relevance import RelevanceFilter
+from sift.pipeline.disambiguator import ContentDisambiguator
 from sift.pipeline.report_generator import save_reports
 from sift.models import (
     ComparisonReport,
@@ -37,10 +37,12 @@ from sift.ui.display import (
     print_no_scraper,
     print_dedup_summary,
     print_relevance_summary,
+    print_disambiguation_summary,
     print_no_reports,
     ScrapeProgress,
     PipelineProgress,
 )
+from sift.ui import timings as _timings
 
 logger = logging.getLogger(__name__)
 
@@ -102,13 +104,31 @@ def run_analyze(
     """
     setup_logging(settings, verbose=verbose)
 
+    try:
+        _run_analyze_inner(products, sources, settings, output, no_preview, show_banner)
+    finally:
+        _timings.flush()
+
+
+def _run_analyze_inner(
+    products: List[str],
+    sources: List[str],
+    settings: Settings,
+    output: str,
+    no_preview: bool,
+    show_banner: bool,
+) -> None:
     if show_banner:
         print_banner()
     print_config_summary(settings, sources)
 
     dedup = DedupFilter()
-    relevance = RelevanceFilter(settings.relevance)
+    disambiguator = ContentDisambiguator(settings.disambiguator, settings.llm, settings.clustering)
     all_feedback: dict[str, list[FeedbackItem]] = {}
+    candidates: dict[str, list[FeedbackItem]] = {}
+    contexts: dict[str, object] = {}
+    collected_counts: dict[str, int] = {}
+    layer1_stats: dict[str, object] = {}
 
     total_scrape_tasks = len(products) * len(sources)
     with ScrapeProgress(total=total_scrape_tasks) as scrape_progress:
@@ -123,7 +143,8 @@ def run_analyze(
                     scraper.set_source_ref(resolved_refs.get(src))
                     scrape_progress.update_desc(f"Scraping {src} › {product}")
                     try:
-                        items = scraper.scrape(product)
+                        with scrape_progress.start_estimated(src):
+                            items = scraper.scrape(product)
                         source_counts[src] = len(items)
                         feedback.extend(items)
                     except Exception:
@@ -138,21 +159,25 @@ def run_analyze(
             logger.info("Source breakdown for '%s': %s", product, counts_str)
 
             context = build_product_context(product, settings)
-            total_before_relevance = len(feedback)
-            feedback, relevance_stats = relevance.filter(feedback, context)
-            print_relevance_summary(
-                total_before_relevance,
-                relevance_stats.rejected,
-                relevance_stats.kept,
-                relevance_stats.relaxed,
-            )
+            contexts[product] = context
+            collected_counts[product] = len(feedback)
 
+            # Layer 1: cheap heuristic scoring drops obvious garbage before any
+            # embedding work. Layers 2 + 3 run later (per product) in resolve().
+            feedback, l1_stats = disambiguator.prefilter(feedback, context)
+            layer1_stats[product] = l1_stats
+
+            # Dedup + truncate (top-N by heuristic score) BEFORE embedding so
+            # Layer 2 never embeds duplicates or items we'd discard anyway.
             total_before_dedup = len(feedback)
             feedback = dedup.filter(feedback)
             if len(feedback) > settings.max_feedback_per_source:
-                feedback = feedback[:settings.max_feedback_per_source]
-
-            all_feedback[product] = feedback
+                feedback = sorted(
+                    feedback,
+                    key=lambda it: it.metadata.get("relevance_score", 0.0),
+                    reverse=True,
+                )[:settings.max_feedback_per_source]
+            candidates[product] = feedback
             print_dedup_summary(
                 total_before_dedup,
                 total_before_dedup - len(feedback),
@@ -160,28 +185,40 @@ def run_analyze(
             )
 
     product_reports: dict[str, ProductReport] = {}
-    for product, feedback in all_feedback.items():
+
+    from sift.pipeline.analyzer import Analyzer
+    from sift.pipeline.clusterer import Clusterer
+    from sift.pipeline.comparator import Comparator
+    from sift.scrapers.factory import get_cached_profile
+
+    clusterer = Clusterer(settings.clustering)
+    analyzer_inst = Analyzer(settings.llm)
+    comparator = Comparator(settings.llm)
+
+    for product in products:
+        feedback = candidates.get(product, [])
+        context = contexts[product]
         if len(feedback) < 3:
+            all_feedback[product] = feedback
             print_skip_warning(product, len(feedback))
             continue
 
-        from sift.pipeline.analyzer import Analyzer
-        from sift.pipeline.clusterer import Clusterer
-        from sift.pipeline.comparator import Comparator
-        from sift.pipeline.embedder import Embedder
-
-        embedder = Embedder(settings.clustering)
-        clusterer = Clusterer(settings.clustering)
-        analyzer_inst = Analyzer(settings.llm)
-        comparator = Comparator(settings.llm)
-
         with PipelineProgress(total_stages=2) as pipeline:
-            pipeline.stage(f"Embedding — {product}")
-            embeddings = embedder.embed(feedback)
+            # Layers 2 + 3: embed survivors once, score against the product
+            # anchor, gate the uncertain band. The embeddings come back sliced
+            # to the kept items and are reused for clustering (no re-embed).
+            pipeline.stage(f"Disambiguating — {product}")
+            with pipeline.start_estimated("embedding"):
+                profile = get_cached_profile(settings, product)
+                result = disambiguator.resolve(feedback, context, profile)
             pipeline.advance()
 
+            kept = result.kept_items
+            embeddings = result.kept_embeddings
+
             pipeline.stage(f"Clustering — {product}")
-            clusters = clusterer.cluster(embeddings, feedback)
+            with pipeline.start_estimated("clustering"):
+                clusters = clusterer.cluster(embeddings, kept)
             pipeline.advance()
 
             # Expand total now that we know the cluster count so the bar
@@ -191,21 +228,30 @@ def run_analyze(
 
             for i, cluster in enumerate(clusters, 1):
                 pipeline.stage(f"Analysing — {product} ({i}/{n})")
-                analyzer_inst.analyze_cluster(cluster)
+                with pipeline.start_estimated("analyse_cluster"):
+                    analyzer_inst.analyze_cluster(cluster)
                 pipeline.advance()
 
             pipeline.stage(f"Insights — {product}")
-            insights = analyzer_inst.generate_overall_insights(product, clusters)
+            with pipeline.start_estimated("insights"):
+                insights = analyzer_inst.generate_overall_insights(product, clusters)
             pipeline.advance()
 
-            report = ProductReport(
-                product=product,
-                total_feedback_count=len(feedback),
-                clusters=clusters,
-                overall_insights=insights.get("overall_insights", ""),
-                top_pain_points=insights.get("top_pain_points", []),
-            )
-            product_reports[product] = report
+        all_feedback[product] = kept
+        print_disambiguation_summary(
+            collected_counts.get(product, 0),
+            layer1_stats[product],
+            result.stats,
+        )
+
+        report = ProductReport(
+            product=product,
+            total_feedback_count=len(kept),
+            clusters=clusters,
+            overall_insights=insights.get("overall_insights", ""),
+            top_pain_points=insights.get("top_pain_points", []),
+        )
+        product_reports[product] = report
 
     if not product_reports:
         empty_products = [product for product, feedback in all_feedback.items() if not feedback]
@@ -226,7 +272,8 @@ def run_analyze(
     if len(product_reports) >= 2:
         with PipelineProgress(total_stages=1) as pipeline:
             pipeline.stage("Comparison")
-            comparison = comparator.compare(product_reports)
+            with pipeline.start_estimated("comparison"):
+                comparison = comparator.compare(product_reports)
             pipeline.advance()
         print_comparison_summary(comparison)
         if not no_preview:
@@ -260,12 +307,25 @@ def run_scrape(
     """
     setup_logging(settings, verbose=verbose)
 
+    try:
+        _run_scrape_inner(product, sources, settings, output, show_banner)
+    finally:
+        _timings.flush()
+
+
+def _run_scrape_inner(
+    product: str,
+    sources: List[str],
+    settings: Settings,
+    output: str,
+    show_banner: bool,
+) -> None:
     if show_banner:
         print_banner()
     print_config_summary(settings, sources)
 
     dedup = DedupFilter()
-    relevance = RelevanceFilter(settings.relevance)
+    disambiguator = ContentDisambiguator(settings.disambiguator, settings.llm, settings.clustering)
     feedback: list[FeedbackItem] = []
     from sift.scrapers.factory import resolve_source_refs
     resolved_refs = resolve_source_refs(settings, product, sources)
@@ -276,7 +336,8 @@ def run_scrape(
                 scraper.set_source_ref(resolved_refs.get(src))
                 scrape_progress.update_desc(f"Scraping {src} › {product}")
                 try:
-                    items = scraper.scrape(product)
+                    with scrape_progress.start_estimated(src):
+                        items = scraper.scrape(product)
                     feedback.extend(items)
                 except Exception:
                     logger.exception("Scraper '%s' failed for '%s'.", src, product)
@@ -287,12 +348,20 @@ def run_scrape(
 
     context = build_product_context(product, settings)
     total_before_relevance = len(feedback)
-    feedback, relevance_stats = relevance.filter(feedback, context)
+    # Scrape-only path runs Layer 1 (heuristics) only — no embedding/LLM, so
+    # `sift scrape` stays fast and dependency-light. Top-K safety net keeps the
+    # run non-empty if every item scored below the hard-reject floor.
+    scored_items = list(feedback)
+    feedback, _l1_stats = disambiguator.prefilter(feedback, context)
+    safety_net = False
+    if not feedback and scored_items:
+        feedback = disambiguator.safety_net_by_score(scored_items)
+        safety_net = True
     print_relevance_summary(
         total_before_relevance,
-        relevance_stats.rejected,
-        relevance_stats.kept,
-        relevance_stats.relaxed,
+        total_before_relevance - len(feedback),
+        len(feedback),
+        safety_net,
     )
 
     total_before = len(feedback)

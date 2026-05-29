@@ -19,10 +19,15 @@ sources:
         - "discord_exports"
         - "linkedin_comments"
 
-relevance:
+# Three-layer content disambiguator: heuristics (L1) -> anchor similarity (L2)
+# -> LLM yes/no gate (L3). Only the commonly-tuned knobs are shown; every other
+# field falls back to its dataclass default in sift/config.py:DisambiguatorConfig.
+disambiguator:
     enabled: true
-    threshold: 0.45
-    min_items_before_relaxing: 3
+    llm_gate_enabled: true
+    llm_gate_max_items: 50
+    heuristic_hard_reject: 0.10
+    anchor_min_similarity: 0.35
 
 products:
     Droid:

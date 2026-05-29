@@ -98,6 +98,8 @@ class AppStoreScraper(RequestsScraper):
                 )
                 data = self._get_json(url)
                 entries = data.get("feed", {}).get("entry", []) if isinstance(data, dict) else []
+                if isinstance(entries, dict):
+                    entries = [entries]
                 for entry in entries:
                     if "im:name" in entry:
                         continue

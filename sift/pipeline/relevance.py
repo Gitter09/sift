@@ -1,118 +1,139 @@
+"""Layer 1 of the content disambiguator: cheap heuristic scoring.
+
+`RelevanceFilter` no longer makes the final keep/reject call — that now belongs
+to the three-layer `ContentDisambiguator` (heuristics -> anchor similarity ->
+LLM gate). Layer 1's job is to assign each item a 0-1 heuristic relevance score
+and drop only obvious garbage (`heuristic_hard_reject`, default 0.10) before the
+expensive embedding step. Everything else flows downstream for semantic
+adjudication.
+
+For ambiguous products (common-word names like "Notion" / "Signal"), Layer 1
+also applies auto-negative phrase penalties and only grants the full alias bonus
+when the alias appears in a structural position (URL/metadata/title) rather than
+buried in common-word prose.
+"""
+
 import logging
 import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-from sift.config import RelevanceConfig
+from sift.config import DisambiguatorConfig
 from sift.models import FeedbackItem, ProductContext
+from sift.pipeline.ambiguous_words import is_ambiguous_name
 
 logger = logging.getLogger(__name__)
 
 
+# Sources where a bare product mention is much more likely to be the product
+# than the common word (a "Notion" GitHub issue vs "notion" in a SO answer).
+_DEV_SOURCES = frozenset({"github_issues", "stack_overflow", "dev_to", "hacker_news"})
+_DEV_CATEGORY_MARKERS = ("developer", "ai coding agent", "developer-tools", "devtool")
+
+_WEBSITE_BONUS = 0.35
+
+
 @dataclass(frozen=True)
-class RelevanceStats:
+class Layer1Stats:
     total: int
+    dropped: int
     kept: int
-    rejected: int
-    threshold: float
-    relaxed: bool = False
 
 
 class RelevanceFilter:
-    """Filters scraped candidates to feedback about the resolved product."""
+    """Layer 1 heuristic scorer for the content disambiguator."""
 
-    def __init__(self, config: RelevanceConfig):
+    def __init__(self, config: DisambiguatorConfig):
         self.config = config
 
-    def filter(
+    def prefilter(
         self,
         items: list[FeedbackItem],
         context: ProductContext,
-    ) -> tuple[list[FeedbackItem], RelevanceStats]:
+    ) -> tuple[list[FeedbackItem], Layer1Stats]:
+        """Score every item and drop those below ``heuristic_hard_reject``.
+
+        Survivors keep their ``relevance_score`` in metadata for downstream
+        layers (anchor combine, top-N truncation, safety net).
+        """
         if not self.config.enabled:
-            return items, RelevanceStats(
-                total=len(items),
-                kept=len(items),
-                rejected=0,
-                threshold=self.config.threshold,
-            )
+            return items, Layer1Stats(total=len(items), dropped=0, kept=len(items))
 
-        scored = [(item, self.score(item, context)) for item in items]
-        kept = [
-            item
-            for item, score in scored
-            if score >= self.config.threshold
-        ]
-        relaxed = False
+        ambiguous = is_ambiguous_name(context.canonical_name)
+        kept: list[FeedbackItem] = []
+        for item in items:
+            score = self.score(item, context, ambiguous)
+            if score >= self.config.heuristic_hard_reject:
+                kept.append(item)
+            elif not item.metadata.get("rejection_reason"):
+                item.metadata["rejection_reason"] = (
+                    f"layer-1 heuristic score {score:.2f} below "
+                    f"{self.config.heuristic_hard_reject:.2f}"
+                )
 
-        if len(kept) < self.config.min_items_before_relaxing:
-            fallback = [
-                item
-                for item, score in scored
-                if score > 0 and not item.metadata.get("rejection_reason")
-            ]
-            if len(fallback) > len(kept):
-                kept = fallback
-                relaxed = True
-
-        kept_ids = {item.id for item in kept}
-        for item, score in scored:
-            if item.id not in kept_ids and not item.metadata.get("rejection_reason"):
-                item.metadata["rejection_reason"] = f"relevance score {score:.2f} below threshold"
-
-        rejected = len(items) - len(kept)
-        if rejected:
+        dropped = len(items) - len(kept)
+        if dropped:
             logger.info(
-                "Relevance filter rejected %d/%d item(s) for '%s'.",
-                rejected,
+                "Layer 1 dropped %d/%d garbage item(s) for '%s'.",
+                dropped,
                 len(items),
                 context.canonical_name,
             )
+        return kept, Layer1Stats(total=len(items), dropped=dropped, kept=len(kept))
 
-        return kept, RelevanceStats(
-            total=len(items),
-            kept=len(kept),
-            rejected=rejected,
-            threshold=self.config.threshold,
-            relaxed=relaxed,
-        )
-
-    def score(self, item: FeedbackItem, context: ProductContext) -> float:
+    def score(self, item: FeedbackItem, context: ProductContext, ambiguous: bool) -> float:
         text = _normalize_text(item.text)
-        url = item.url or ""
+        url = _normalize_text(item.url or "")
         metadata_text = _normalize_text(" ".join(_flatten_metadata(item.metadata)))
+        structural_text = f"{url} {metadata_text}".strip()
+
         matched_aliases = _matches_terms(text, context.search_terms)
         matched_identifiers = _matches_identifiers(item, context)
+        matched_structural = _matches_terms(structural_text, context.search_terms)
         matched_context = _matches_context_terms(text, context)
         matched_negatives = _matches_terms(text, context.negative_terms)
+        matched_auto_negatives = _auto_negative_matches(text, context, ambiguous)
 
         score = 0.0
         reasons: list[str] = []
 
         if matched_identifiers:
-            score += 0.75
+            score += self.config.identifier_weight
             reasons.extend(f"identifier:{term}" for term in matched_identifiers)
 
         if matched_aliases:
-            score += 0.55
+            # For ambiguous names a body-only alias mention is weak: grant the
+            # full alias weight only when it also appears structurally.
+            if ambiguous and not matched_structural:
+                score += self.config.alias_weight * 0.5
+                reasons.append("alias:body-only(ambiguous)")
+            else:
+                score += self.config.alias_weight
             reasons.extend(f"alias:{term}" for term in matched_aliases)
 
-        if context.website and _host_matches(url, context.website):
-            score += 0.35
-            reasons.append("website")
+        if matched_structural:
+            score += self.config.structural_context_bonus
+            reasons.extend(f"structural:{term}" for term in matched_structural)
 
-        metadata_aliases = _matches_terms(metadata_text, context.search_terms)
-        if metadata_aliases:
-            score += 0.45
-            reasons.extend(f"metadata:{term}" for term in metadata_aliases)
+        if context.website and _host_matches(item.url or "", context.website):
+            score += _WEBSITE_BONUS
+            reasons.append("website")
 
         if matched_context:
             score += min(0.25, 0.08 * len(matched_context))
             reasons.extend(f"context:{term}" for term in matched_context)
 
+        if _is_dev_source(item.source) and _is_dev_category(context.category):
+            score += self.config.source_type_bonus
+            reasons.append(f"source_type:{item.source}")
+
         if matched_negatives:
             score -= min(0.55, 0.18 * len(matched_negatives))
             reasons.extend(f"negative:{term}" for term in matched_negatives)
+
+        if matched_auto_negatives:
+            score -= self.config.auto_negative_penalty * len(matched_auto_negatives)
+            reasons.extend(f"auto_negative:{p}" for p in matched_auto_negatives)
 
         score = max(0.0, min(1.0, score))
         item.metadata["relevance_score"] = round(score, 3)
@@ -121,12 +142,34 @@ class RelevanceFilter:
         item.metadata["matched_context_terms"] = matched_context
         if matched_negatives:
             item.metadata["negative_terms"] = matched_negatives
-            if score < self.config.threshold:
-                item.metadata["rejection_reason"] = (
-                    "matched negative context: " + ", ".join(matched_negatives)
-                )
+        if matched_auto_negatives:
+            item.metadata["auto_negative_patterns"] = matched_auto_negatives
         item.metadata["relevance_reasons"] = reasons
         return score
+
+
+def _is_dev_source(source: str) -> bool:
+    return (source or "").casefold() in _DEV_SOURCES
+
+
+def _is_dev_category(category: str) -> bool:
+    cat = _normalize_text(category)
+    return any(marker in cat for marker in _DEV_CATEGORY_MARKERS)
+
+
+def _auto_negative_matches(text: str, context: ProductContext, ambiguous: bool) -> list[str]:
+    """Common-word constructions that never refer to the product.
+
+    Only applied to ambiguous (common-word) names — for "Notion", phrases like
+    "the notion of" or "any notion" are ordinary English, not the product.
+    """
+    if not ambiguous:
+        return []
+    name = _normalize_text(context.canonical_name)
+    if not name:
+        return []
+    patterns = [f"the {name} of", f"the {name} that", f"any {name}", f"{name} as a"]
+    return [p for p in patterns if p in text]
 
 
 def _matches_identifiers(item: FeedbackItem, context: ProductContext) -> list[str]:

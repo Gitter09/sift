@@ -19,3 +19,11 @@ class Embedder:
         embeddings = self.model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
         logger.debug("Generated embeddings matrix of shape %s", embeddings.shape)
         return embeddings
+
+    def embed_profile(self, text: str) -> np.ndarray:
+        """Embed a single string into a 1-D, L2-normalized 384-dim vector.
+
+        Used for the product anchor (Layer 2). Normalized so cosine similarity
+        against item embeddings (also normalized) is a plain dot product.
+        """
+        return self.model.encode(text, show_progress_bar=False, normalize_embeddings=True)
