@@ -19,6 +19,7 @@ from sift.pipeline.resolver.sources.base import (
     SourceResolver,
     host_matches,
     parse_path_segment,
+    slug_join,
     slug_token_set,
 )
 
@@ -42,9 +43,7 @@ class DevToResolver(SourceResolver):
             # Synthesize a tag from the product name itself — Dev.to
             # auto-creates tags from slugs, so a name-derived guess is
             # often correct even without a direct match.
-            fallback_tag = slug_token_set(profile.name)
-            tag = "".join(sorted(fallback_tag)) if fallback_tag else profile.name.lower()
-            tag = tag.replace(" ", "")
+            tag = slug_join(profile.name) or profile.name.lower().replace(" ", "")
             article_urls = [h.url for h in article_hits if host_matches(h.url, "dev.to")]
             return SourceRef(
                 source=self.source_name,

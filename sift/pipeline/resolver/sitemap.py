@@ -20,7 +20,7 @@ import sqlite3
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from urllib.parse import urlparse
 
 from sift.pipeline.http_client import CurlCffiSession
@@ -124,21 +124,31 @@ class SitemapIndex(SearchClient):
             return
 
         entries: list[tuple[str, str, str]] = []
-        for sitemap_url in urls:
-            try:
-                resp = self._http.get(sitemap_url, timeout=30)
-                if resp is None or resp.status_code != 200:
-                    logger.warning("Sitemap fetch failed for %s", sitemap_url)
-                    continue
-                content = resp.content
-                if sitemap_url.endswith(".gz"):
-                    import gzip
-                    content = gzip.decompress(content)
-                root = ET.fromstring(content)
-            except Exception as e:
-                logger.warning("Sitemap parse failed for %s: %s", sitemap_url, e)
+        # BFS over (url, depth). Sitemap-of-sitemaps roots (e.g. g2.com)
+        # expand into child shards on the first hop; a second hop reaches
+        # product URLs. Cap depth at 2 — anything deeper is an unusual
+        # configuration and not worth recursing through.
+        seen: set[str] = set()
+        pending: list[tuple[str, int]] = [(u, 0) for u in urls]
+        while pending:
+            sitemap_url, depth = pending.pop(0)
+            if sitemap_url in seen:
                 continue
-            # Strip namespace for forgiving parsing.
+            seen.add(sitemap_url)
+            root = self._fetch_sitemap_root(sitemap_url)
+            if root is None:
+                continue
+            if root.tag.endswith("sitemapindex"):
+                if depth >= 2:
+                    logger.debug("Sitemap depth cap reached at %s", sitemap_url)
+                    continue
+                for loc in root.iter():
+                    if loc.tag.endswith("loc") and loc.text:
+                        child = loc.text.strip()
+                        if child:
+                            pending.append((child, depth + 1))
+                continue
+            # <urlset> root — collect product URLs.
             for loc in root.iter():
                 if loc.tag.endswith("loc") and loc.text:
                     url = loc.text.strip()
@@ -162,6 +172,25 @@ class SitemapIndex(SearchClient):
                 (host, now),
             )
         logger.info("Indexed %d sitemap entries for %s", len(entries), host)
+
+    def _fetch_sitemap_root(self, sitemap_url: str) -> Optional[ET.Element]:
+        """Fetch a sitemap (.xml or .xml.gz) and return its parsed root.
+
+        Returns None on HTTP / parse failure (already logged).
+        """
+        try:
+            resp = self._http.get(sitemap_url, timeout=30)
+            if resp is None or resp.status_code != 200:
+                logger.warning("Sitemap fetch failed for %s", sitemap_url)
+                return None
+            content = resp.content
+            if sitemap_url.endswith(".gz"):
+                import gzip
+                content = gzip.decompress(content)
+            return ET.fromstring(content)
+        except Exception as e:
+            logger.warning("Sitemap parse failed for %s: %s", sitemap_url, e)
+            return None
 
 
 _SITE_PREFIX = re.compile(r"site:([\w.-]+)", re.IGNORECASE)

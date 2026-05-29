@@ -87,3 +87,13 @@ _SLUG_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 def slug_token_set(value: str) -> set[str]:
     return set(_SLUG_TOKEN_RE.findall(value.lower()))
+
+
+def slug_join(value: str) -> str:
+    """Order-preserving concatenation of alphanumeric tokens in ``value``.
+
+    Used to synthesise a slug-shaped fallback identifier from a product name:
+    ``"Notion AI"`` → ``"notionai"`` (not ``"ainotion"`` as a sorted set would
+    give).
+    """
+    return "".join(_SLUG_TOKEN_RE.findall(value.lower()))

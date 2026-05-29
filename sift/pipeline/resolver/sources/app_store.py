@@ -81,7 +81,7 @@ class AppStoreResolver(SourceResolver):
                 ResolverCandidate(
                     ref=ref,
                     evidence_title=f"{track_name} by {seller}",
-                    evidence_snippet=item.get("description", "")[:200],
+                    evidence_snippet=(item.get("description") or "")[:200],
                     raw_score=score,
                 )
             )

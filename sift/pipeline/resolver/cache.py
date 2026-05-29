@@ -157,10 +157,12 @@ class ResolverCache:
         return [dict(r) for r in rows]
 
     def list_refs_for(self, name: str) -> list[dict]:
-        entry = self.get_profile(name)
-        if not entry:
+        # TTL-bypass: list refs even when the profile is stale, so a user
+        # inspecting the cache after expiry can still see what's stored.
+        profile = self._load_profile_raw(name)
+        if profile is None:
             return []
-        profile_key = _profile_key(entry.value)
+        profile_key = _profile_key(profile)
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT source, ref_json, resolved_at, resolver_used, confidence FROM refs WHERE profile_key = ?",
@@ -179,23 +181,29 @@ class ResolverCache:
 
     def clear_profile(self, name: str) -> int:
         """Delete a profile and all refs derived from it. Returns rows removed."""
-        entry = self.get_profile(name)
+        # TTL-bypass: cleanup must work on stale profiles too, otherwise
+        # orphaned ref rows accumulate and `sift cache clear` silently
+        # fails to remove them.
+        profile = self._load_profile_raw(name)
         with self._connect() as conn:
-            count = conn.execute("DELETE FROM profiles WHERE name_key = ?", (_name_key(name),)).rowcount
-            if entry:
+            count = conn.execute(
+                "DELETE FROM profiles WHERE name_key = ?", (_name_key(name),)
+            ).rowcount
+            if profile is not None:
                 count += conn.execute(
-                    "DELETE FROM refs WHERE profile_key = ?", (_profile_key(entry.value),)
+                    "DELETE FROM refs WHERE profile_key = ?", (_profile_key(profile),)
                 ).rowcount
         return count
 
     def clear_ref(self, name: str, source: str) -> int:
-        entry = self.get_profile(name)
-        if not entry:
+        # TTL-bypass: same reasoning as clear_profile.
+        profile = self._load_profile_raw(name)
+        if profile is None:
             return 0
         with self._connect() as conn:
             return conn.execute(
                 "DELETE FROM refs WHERE source = ? AND profile_key = ?",
-                (source, _profile_key(entry.value)),
+                (source, _profile_key(profile)),
             ).rowcount
 
     def clear_all(self) -> None:
@@ -208,3 +216,19 @@ class ResolverCache:
         if resolved_at.tzinfo is None:
             resolved_at = resolved_at.replace(tzinfo=timezone.utc)
         return datetime.now(timezone.utc) - resolved_at > self.ttl
+
+    def _load_profile_raw(self, name: str) -> Optional[ProductProfile]:
+        """Load a profile from disk ignoring the TTL.
+
+        Used by cleanup / inspection paths so that an expired profile row
+        can still be located (and its ``profile_key`` recomputed to find
+        derived refs) after ``get_profile`` would refuse to return it.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT profile_json FROM profiles WHERE name_key = ?",
+                (_name_key(name),),
+            ).fetchone()
+        if not row:
+            return None
+        return ProductProfile.from_dict(json.loads(row["profile_json"]))

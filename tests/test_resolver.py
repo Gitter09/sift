@@ -338,3 +338,180 @@ def test_pipeline_unknown_source_returns_none(tmp_path):
     pipeline = ResolverPipeline(cache, enricher, resolvers={})
     out = pipeline.resolve("X", ["bogus"], hint_url="https://example.com")
     assert out == {"bogus": None}
+
+
+# ---------- Fix #1: app_store None-description ----------------------------
+
+
+def test_app_store_resolver_tolerates_null_description():
+    """iTunes JSON may carry `"description": null` (key present, value None);
+    slicing must not raise."""
+    from sift.pipeline.resolver.sources.app_store import AppStoreResolver
+
+    resolver = AppStoreResolver(search_client=None, disambiguator=None)
+    results = [
+        {"trackId": 1, "trackName": "Notion", "sellerName": "Notion Labs",
+         "trackViewUrl": "https://apps.apple.com/us/app/notion/id1232780281",
+         "description": None, "bundleId": "notion.id"}
+    ]
+    candidates = resolver._collect(_profile(), results)
+    assert len(candidates) == 1
+    assert candidates[0].evidence_snippet == ""
+
+
+# ---------- Fix #6: dev_to fallback tag preserves token order -------------
+
+
+def test_dev_to_fallback_tag_preserves_token_order():
+    """`Notion AI` must resolve to `notionai`, not the alphabetised `ainotion`."""
+    search = FakeSearch()  # no Brave hits → fall through to synth tag
+    resolver = DevToResolver(search_client=search, disambiguator=None)
+    profile = ProductProfile(name="Notion AI", homepage="https://notion.so",
+                             description="ai workspace", category="productivity")
+    ref = resolver.resolve(profile)
+    assert ref is not None
+    assert ref.identifier == "notionai"
+    assert ref.url == "https://dev.to/t/notionai"
+
+
+# ---------- Fix #7: sitemap unwraps <sitemapindex> roots ------------------
+
+
+def test_sitemap_unwraps_sitemapindex_root(tmp_path, monkeypatch):
+    """A sitemap-of-sitemaps root must recurse into child shards rather than
+    indexing the child URLs as fake products."""
+    from sift.pipeline.resolver import sitemap as sitemap_mod
+    from sift.pipeline.resolver.sitemap import SitemapIndex
+
+    # Force-register a test host so we don't touch real URLs.
+    monkeypatch.setitem(sitemap_mod._SITEMAP_URLS, "test.example",
+                        ["https://test.example/root.xml"])
+
+    index_xml = (
+        b'<?xml version="1.0"?>'
+        b'<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        b'<sitemap><loc>https://test.example/shard1.xml</loc></sitemap>'
+        b'<sitemap><loc>https://test.example/shard2.xml</loc></sitemap>'
+        b'</sitemapindex>'
+    )
+    shard1_xml = (
+        b'<?xml version="1.0"?>'
+        b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        b'<url><loc>https://test.example/p/widget-pro</loc></url>'
+        b'</urlset>'
+    )
+    shard2_xml = (
+        b'<?xml version="1.0"?>'
+        b'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        b'<url><loc>https://test.example/p/gizmo-2</loc></url>'
+        b'</urlset>'
+    )
+    responses = {
+        "https://test.example/root.xml": shard1_xml.replace(b"urlset", b"sitemapindex").replace(
+            b"<url><loc>https://test.example/p/widget-pro</loc></url>",
+            b"<sitemap><loc>https://test.example/shard1.xml</loc></sitemap>"
+            b"<sitemap><loc>https://test.example/shard2.xml</loc></sitemap>",
+        ),
+        "https://test.example/shard1.xml": shard1_xml,
+        "https://test.example/shard2.xml": shard2_xml,
+    }
+    responses["https://test.example/root.xml"] = index_xml
+
+    def fake_get(url, timeout=30):
+        body = responses[url]
+        return MagicMock(status_code=200, content=body)
+
+    sitemap = SitemapIndex(str(tmp_path / "sitemap.db"))
+    with patch.object(sitemap._http, "get", side_effect=fake_get):
+        hits = sitemap.web_search("site:test.example widget", limit=10)
+
+    slugs = {h.title for h in hits}
+    # Child sitemap URLs must NOT have leaked in as products.
+    assert "shard1.xml" not in slugs
+    assert "shard2.xml" not in slugs
+    # The real product slug from the shard is reachable.
+    assert "widget-pro" in slugs
+
+
+# ---------- Fix #8: clear_profile/clear_ref bypass TTL --------------------
+
+
+def test_clear_profile_removes_refs_when_profile_is_stale(tmp_path):
+    """`clear_profile` must purge orphan ref rows even when the profile has
+    aged past the cache TTL."""
+    cache = ResolverCache(str(tmp_path / "cache.db"), ttl_days=30)
+    profile = ProductProfile(name="Stale", homepage="https://stale.example")
+    cache.put_profile(profile)
+    cache.put_ref(profile, SourceRef(source="product_hunt", identifier="stale-2"))
+    cache.put_ref(profile, SourceRef(source="g2", identifier="stale"))
+
+    # Backdate the profile past the TTL.
+    expired = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    with cache._connect() as conn:
+        conn.execute("UPDATE profiles SET resolved_at = ?", (expired,))
+    assert cache.get_profile("Stale") is None  # confirm TTL expiry
+
+    removed = cache.clear_profile("Stale")
+    assert removed == 3  # 1 profile + 2 refs
+
+    # Inspect the table directly to be sure no orphans remain.
+    with cache._connect() as conn:
+        ref_count = conn.execute("SELECT COUNT(*) FROM refs").fetchone()[0]
+    assert ref_count == 0
+
+
+def test_clear_ref_works_on_stale_profile(tmp_path):
+    cache = ResolverCache(str(tmp_path / "cache.db"), ttl_days=30)
+    profile = ProductProfile(name="Stale", homepage="https://stale.example")
+    cache.put_profile(profile)
+    cache.put_ref(profile, SourceRef(source="g2", identifier="stale"))
+
+    with cache._connect() as conn:
+        conn.execute(
+            "UPDATE profiles SET resolved_at = ?",
+            ((datetime.now(timezone.utc) - timedelta(days=60)).isoformat(),),
+        )
+
+    assert cache.clear_ref("Stale", "g2") == 1
+
+
+# ---------- Fix #9: disambiguator caps max_tokens -------------------------
+
+
+def test_disambiguator_caps_max_tokens_below_config_value():
+    """A configured llm.max_tokens of 8000 must not propagate into the
+    disambiguator call — its reply is a single-line JSON object."""
+    from sift.config import LLMConfig
+
+    config = LLMConfig(api_key="sk-test", base_url="https://example",
+                       model="gpt-4o", max_tokens=8000)
+    d = LLMDisambiguator(config)
+    d.client = MagicMock()  # treat as available
+
+    captured: dict = {}
+
+    def fake_completion(client, model, messages, options, log):
+        captured["max_tokens"] = options.max_tokens
+        msg = MagicMock()
+        msg.message.content = '{"index": 0, "reason": "ok"}'
+        msg.finish_reason = "stop"
+        resp = MagicMock()
+        resp.choices = [msg]
+        return resp
+
+    candidates = [
+        ResolverCandidate(
+            ref=SourceRef(source="x", identifier=str(i)),
+            evidence_title=f"c{i}",
+            evidence_snippet="",
+            raw_score=0.5,
+        )
+        for i in range(2)
+    ]
+    with patch(
+        "sift.pipeline.resolver.disambiguator.create_chat_completion",
+        side_effect=fake_completion,
+    ):
+        d.pick(_profile(), candidates)
+
+    assert captured["max_tokens"] == 512

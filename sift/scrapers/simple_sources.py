@@ -8,7 +8,6 @@ from typing import Any, Iterable, List, Optional
 from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
-from curl_cffi import requests as curl_requests
 
 from sift.config import (
     AppStoreConfig,
@@ -378,10 +377,24 @@ class GitHubIssuesScraper(RequestsScraper):
 
 _PH_GRAPHQL_URL = "https://api.producthunt.com/v2/api/graphql"
 
-# PH API v2 has no full-text search on `posts` and no `reviews` type —
-# only `Comment`. We look up the launch post by slug and pull its
-# discussion thread. Reviews proper are only available via the web
-# page, which the __NEXT_DATA__ fallback handles.
+
+class _PHTransientError(Exception):
+    """Raised by ``_post_ph_graphql`` for network / HTTP failures.
+
+    Distinct from ``None`` (which signals a 401 → retry with a refreshed
+    token) so callers can tell a transient failure apart from a real
+    "no post found" response and log accordingly.
+    """
+
+
+# PH API v2 has no full-text search on `posts` (ARCHITECTURE.md
+# Decision 042 — schema introspection confirmed `posts` only accepts
+# filter args, no `search`) and no `reviews` type — only `Comment`. We
+# look up the launch post by slug and pull its discussion thread.
+# Reviews proper are only available via the web page, which the
+# __NEXT_DATA__ fallback handles. When the slug guess misses we surface
+# an actionable log line pointing at the resolver / manual config
+# rather than silently returning [].
 _PH_POST_QUERY = """
 query($slug: String!, $first: Int!) {
   post(slug: $slug) {
@@ -458,30 +471,31 @@ class ProductHuntScraper(RequestsScraper):
         token = self._get_access_token()
         if not token:
             return []
-        slug = (
-            (self.source_ref.identifier if self.source_ref else None)
-            or self.config.slugs.get(product_name)
-            or product_name.lower().replace(" ", "-")
-        )
-        payload = {
-            "query": _PH_POST_QUERY,
-            "variables": {"slug": slug, "first": min(50, self.config.max_items)},
-        }
-        data = self._post_ph_graphql(payload, token)
-        if data is None:
-            token = self._get_access_token(force_refresh=True)
-            if not token:
-                return []
-            data = self._post_ph_graphql(payload, token)
-        if not isinstance(data, dict):
+        # Slug precedence: resolver-confirmed → user-configured → name guess.
+        # PH v2 has no `search` on the posts query (Decision 042) so when the
+        # guess misses, the API path is exhausted — log an actionable hint
+        # instead of silently returning [].
+        confirmed_slug = (self.source_ref.identifier if self.source_ref else None) or \
+            self.config.slugs.get(product_name)
+        slug = confirmed_slug or product_name.lower().replace(" ", "-")
+        try:
+            post = self._post_by_slug(slug, token)
+        except _PHTransientError as e:
+            logger.warning("%s", e)
             return []
-        if data.get("errors"):
-            logger.warning("Product Hunt GraphQL errors for slug '%s': %s", slug, data["errors"])
-            return []
-
-        post = (data.get("data") or {}).get("post")
-        if not post:
-            logger.info("Product Hunt: no post found for slug '%s'", slug)
+        if post is None:
+            if confirmed_slug is None:
+                logger.warning(
+                    "Product Hunt: no post for guessed slug '%s' (from product '%s'). "
+                    "Add product_hunt.slugs['%s'] = '<real-slug>' to config.yaml, "
+                    "or enable the resolver to auto-discover it.",
+                    slug, product_name, product_name,
+                )
+            else:
+                logger.info(
+                    "Product Hunt: no post found for slug '%s' (configured for '%s')",
+                    slug, product_name,
+                )
             return []
 
         items: List[FeedbackItem] = []
@@ -530,6 +544,32 @@ class ProductHuntScraper(RequestsScraper):
         logger.info("Product Hunt API: collected %d items for '%s'", len(items), product_name)
         return items
 
+    def _post_by_slug(self, slug: str, token: str) -> Optional[dict]:
+        """Run ``_PH_POST_QUERY`` with a one-shot token-refresh on 401.
+
+        Returns the ``post`` node (or None when GraphQL replies but the
+        slug doesn't exist). Raises ``_PHTransientError`` on network /
+        HTTP failures.
+        """
+        payload = {
+            "query": _PH_POST_QUERY,
+            "variables": {"slug": slug, "first": min(50, self.config.max_items)},
+        }
+        data = self._post_ph_graphql(payload, token)
+        if data is None:
+            refreshed = self._get_access_token(force_refresh=True)
+            if not refreshed:
+                return None
+            data = self._post_ph_graphql(payload, refreshed)
+        if not isinstance(data, dict):
+            return None
+        if data.get("errors"):
+            logger.warning(
+                "Product Hunt GraphQL errors for slug '%s': %s", slug, data["errors"]
+            )
+            return None
+        return (data.get("data") or {}).get("post")
+
     def _post_ph_graphql(self, payload: dict, token: str) -> Optional[Any]:
         """POST a GraphQL query. Returns None on 401 so the caller can refresh."""
         self.rate_limiter.wait()
@@ -543,16 +583,16 @@ class ProductHuntScraper(RequestsScraper):
                 _PH_GRAPHQL_URL, json=payload, headers=headers, timeout=20
             )
         except Exception as e:
-            logger.warning("Product Hunt GraphQL request failed: %s", e)
-            return {}
+            raise _PHTransientError(f"Product Hunt GraphQL request failed: {e}") from e
         if resp.status_code == 401:
             return None
         try:
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
-            logger.warning("Product Hunt GraphQL HTTP %s: %s", resp.status_code, e)
-            return {}
+            raise _PHTransientError(
+                f"Product Hunt GraphQL HTTP {resp.status_code}: {e}"
+            ) from e
 
     def _scrape_via_html(self, product_name: str) -> List[FeedbackItem]:
         # Product Hunt is a Next.js SPA — selectors against the raw HTML
@@ -588,8 +628,15 @@ class ProductHuntScraper(RequestsScraper):
                 logger.debug("Product Hunt: no __NEXT_DATA__ on %s", url)
                 continue
 
+            needle = product_name.lower()
             for text, node_url, metadata in _walk_ph_feedback(payload, slug):
                 if len(text) < 20 or text in seen_texts:
+                    continue
+                # Per-product topicality — PH's __NEXT_DATA__ also embeds
+                # related-product comments and sidebar threads, which would
+                # otherwise pollute the FeedbackItem list when the slug guess
+                # lands on a wrong page.
+                if needle not in text.lower():
                     continue
                 seen_texts.add(text)
                 items.append(FeedbackItem(
@@ -830,8 +877,13 @@ class DevToScraper(RequestsScraper):
         return items
 
 
-class JsonExportScraper(BaseScraper):
+class JsonExportScraper(RequestsScraper):
     def __init__(self, paths: List[str], urls: List[str], max_items: int):
+        # Route through the shared rate-limited curl_cffi session so the
+        # Discord/LinkedIn export URLs share the same TLS impersonation
+        # and per-source token budget as every other HTTP scraper.
+        # Playwright is overkill for static JSON dumps.
+        super().__init__(use_playwright=False)
         self.paths = paths
         self.urls = urls
         self.max_items = max_items
@@ -849,12 +901,10 @@ class JsonExportScraper(BaseScraper):
                 return items[: self.max_items]
 
         for url in self.urls:
-            try:
-                resp = curl_requests.get(url, timeout=20)
-                resp.raise_for_status()
-                items.extend(self._parse_records(resp.json(), product_name, url))
-            except (curl_requests.RequestException, ValueError) as e:
-                logger.warning("%s failed to fetch export %s: %s", self.source_name, url, e)
+            raw = self._get_json(url)
+            if raw is None:
+                continue
+            items.extend(self._parse_records(raw, product_name, url))
         return items[: self.max_items]
 
     def _parse_records(self, raw: Any, product_name: str, origin: str) -> List[FeedbackItem]:
